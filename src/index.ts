@@ -91,9 +91,11 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
 
       const feedbackText = formatInvalidArgsFeedback(exec.name, exec.arguments, result)
 
+      // Use `block` so the Agent Loop treats this as a rejected call
+      // that needs retry, not a completed call with custom content.
       return {
-        kind: 'accept',
-        content: [{ type: 'text', text: feedbackText }],
+        kind: 'block',
+        feedback: [{ type: 'text', text: feedbackText }],
         ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}),
       }
     })
