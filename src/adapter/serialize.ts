@@ -10,6 +10,7 @@ export interface WireTool {
     name: string
     description: string
     parameters: Record<string, unknown>
+    strict: boolean
   }
 }
 
@@ -149,39 +150,44 @@ function enhanceToolDescription(
   description: string,
   parameters: Record<string, unknown>,
 ): string {
-  const parts = [description || `Execute ${name} tool.`]
+  const baseDesc = description || `Execute ${name} tool.`
 
   const required = parameters['required']
-  if (Array.isArray(required) && required.length > 0) {
-    const rules: string[] = []
-    const requiredNames = required as string[]
-
-    for (const req of requiredNames) {
-      rules.push(`- \`${req}\` is REQUIRED.`)
-    }
-
-    // Mention optional-only fields the model keeps misusing as if they were the main command
-    const properties = parameters['properties']
-    if (typeof properties === 'object' && properties !== null) {
-      const propMap = properties as Record<string, unknown>
-      const optionalFields = Object.keys(propMap).filter(
-        (k) => !requiredNames.includes(k),
-      )
-      for (const opt of optionalFields) {
-        if (opt === 'description') {
-          rules.push(`- \`${opt}\` is only a short explanation of why this call is made. Never put the actual command only in \`${opt}\`.`)
-        }
-      }
-    }
-
-    rules.push(`- Never call this tool without all required fields.`)
-
-    parts.push('')
-    parts.push('Parameter rules:')
-    parts.push(...rules)
+  if (!Array.isArray(required) || required.length === 0) {
+    return baseDesc
   }
 
-  return parts.join('\n')
+  const requiredNames = required as string[]
+  const rules: string[] = []
+
+  // Put the most critical rule FIRST — Gemini thinking models read top-down
+  for (const req of requiredNames) {
+    rules.push(`- \`${req}\` is REQUIRED. You MUST provide it.`)
+  }
+
+  // Call out optional fields the model keeps confusing with the required command
+  const properties = parameters['properties']
+  if (typeof properties === 'object' && properties !== null) {
+    const propMap = properties as Record<string, unknown>
+    const optionalFields = Object.keys(propMap).filter(
+      (k) => !requiredNames.includes(k),
+    )
+    for (const opt of optionalFields) {
+      if (opt === 'description') {
+        rules.push(`- \`${opt}\` is NOT the command. It is only a short label. Never put the actual command text only in \`${opt}\`.`)
+      }
+    }
+  }
+
+  rules.push(`- Never call this tool without ALL required fields above.`)
+
+  // Rules go FIRST, then the original description
+  return [
+    `CRITICAL — ${name} parameter rules:`,
+    ...rules,
+    '',
+    baseDesc,
+  ].join('\n')
 }
 
 function serializeTools(tools: readonly ToolSchema[] | undefined): WireTool[] | undefined {
