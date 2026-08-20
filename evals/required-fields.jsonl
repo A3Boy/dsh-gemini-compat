@@ -1,0 +1,2 @@
+{"id": "req-1", "tool": "pwsh", "schema": {"required": ["command", "description"]}, "cases": [{"input": {"description": "List files"}, "expected": "INVALID_ARGS"}, {"input": {"command": "dir", "description": "List files"}, "expected": "VALID"}]}
+{"id": "req-2", "tool": "edit", "schema": {"required": ["file_path", "old_string", "new_string"]}, "cases": [{"input": {"file_path": "a.txt"}, "expected": "INVALID_ARGS"}, {"input": {"file_path": "a.txt", "old_string": "old", "new_string": "new"}, "expected": "VALID"}]}

@@ -1,0 +1,1 @@
+{"id": "long-chain-1", "pipeline": ["glob", "read", "grep", "edit", "pwsh"], "max_turns": 10, "required_adherence_threshold": 1.0}

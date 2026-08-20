@@ -1,0 +1,27 @@
+{
+  "name": "dsh-gemini-compat",
+  "version": "1.0.0",
+  "description": "Gemini tool calling compatibility plugin for DeepSeek Harness (DSH)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "gemini",
+    "tool-calling",
+    "llm-adapter"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "dependencies": {}
+}

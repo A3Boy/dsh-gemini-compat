@@ -1,0 +1,1 @@
+{"id": "para-1", "description": "Parallel read and grep", "tool_calls": [{"id": "call_1", "name": "read", "args": {"file_path": "a.txt"}}, {"id": "call_2", "name": "grep", "args": {"pattern": "hello"}}], "expected_parallel_order_match": true}
