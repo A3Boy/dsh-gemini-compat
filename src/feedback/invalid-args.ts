@@ -1,52 +1,30 @@
-export interface ToolExecutionDetail {
-  name: string;
-  arguments: Record<string, unknown> | string;
-}
-
-export interface ToolResultLike {
-  isError: boolean;
-  content?: string;
-  error?: {
-    message?: string;
-    info?: {
-      code?: string;
-      violations?: string[];
-      [key: string]: unknown;
-    };
-  };
-}
-
-export interface PostToolDecision {
-  overrideContent?: string;
-}
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 
 /**
- * 通用 INVALID_ARGS Feedback Enhancer
- * 
- * 遵守架构规范：
- * 1. 绝不写 `if (exec.name === 'pwsh')` 等具体工具特判
- * 2. 严格仅在 result.isError === true 且 info.code === "INVALID_ARGS" 时介入
- * 3. 绝不通过字符串匹配/文本猜测来介入，防止对非 schema 错误产生副作用误判
- * 4. 明确向模型传达：工具未实际执行，请参考 schema 提供完整参数后重试
- * 5. 不引入自动重试状态机，由 DSH Agent Loop 自然决策
+ * Format the INVALID_ARGS feedback text that tells the model the tool call was
+ * rejected before execution and should retry with complete arguments.
+ *
+ * Never uses tool-specific branching — strictly relies on the structured
+ * `error.info.code === 'INVALID_ARGS'` signal.
  */
 export function formatInvalidArgsFeedback(
-  exec: ToolExecutionDetail,
-  result: ToolResultLike
+  toolName: string,
+  args: unknown,
+  result: Readonly<ToolExecutionResult>,
 ): string {
   const argsFormatted =
-    typeof exec.arguments === 'string'
-      ? exec.arguments
-    : JSON.stringify(exec.arguments, null, 2);
+    typeof args === 'string'
+      ? args
+      : JSON.stringify(args, null, 2)
 
   const violationMessage =
-    (result.error?.info?.violations && result.error.info.violations.length > 0)
-      ? result.error.info.violations.join('; ')
-      : result.error?.message || 'Arguments did not adhere to required JSON schema';
+    result.isError
+      ? result.error.message
+      : 'Arguments did not adhere to required JSON schema'
 
   return [
     'Tool call rejected before execution.',
-    `Tool: ${exec.name}`,
+    `Tool: ${toolName}`,
     '',
     'Provided arguments:',
     argsFormatted,
@@ -55,21 +33,5 @@ export function formatInvalidArgsFeedback(
     violationMessage,
     '',
     "The tool did not execute. Re-check this tool's provided schema and retry with a complete argument object. Do not invent parameter names.",
-  ].join('\n');
-}
-
-export function enhanceInvalidArgsPostExecute(
-  exec: ToolExecutionDetail,
-  result: ToolResultLike
-): PostToolDecision | null {
-  if (
-    result.isError &&
-    result.error?.info?.code === 'INVALID_ARGS'
-  ) {
-    return {
-      overrideContent: formatInvalidArgsFeedback(exec, result),
-    };
-  }
-
-  return null;
+  ].join('\n')
 }

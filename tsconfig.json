@@ -4,13 +4,18 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "declaration": true,
-    "outDir": "./dist",
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./lib",
     "rootDir": "./src",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "tests", "evals"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "lib", "tests", "evals"]
 }

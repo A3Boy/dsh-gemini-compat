@@ -1,96 +1,86 @@
-import { ToolSchema } from '../diagnostics/trace.js';
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 
 export interface GeminiWireProfile {
-  target: 'openai-chat' | 'gemini-native';
-  allowDraftSchemaKeywords?: boolean;
-}
-
-export class IncompatibleSchemaError extends Error {
-  constructor(
-    public readonly toolName: string,
-    public readonly path: string,
-    public readonly reason: string
-  ) {
-    super(`Incompatible tool schema for tool "${toolName}" at ${path}: ${reason}`);
-    this.name = 'IncompatibleSchemaError';
-  }
+  target: 'openai-chat' | 'gemini-native'
+  allowDraftSchemaKeywords?: boolean
 }
 
 /**
- * 无损 Schema 投影 (Lossless Schema Projection)
- * 
- * 规则：
- * 1. 仅移除对验证语义无损的元数据关键字（如 $schema）
- * 2. 严禁静默删除关键验证关键字（如 additionalProperties，若目标协议不支持直接报错 Fail Loud）
- * 3. 返回纯净且符合 Gemini / Router wire 规范的 ToolSchema
+ * Lossless Schema Projection.
+ *
+ * Rules:
+ * 1. Strip only metadata keywords that have no validation semantic (e.g. `$schema`)
+ * 2. Never silently drop validation keywords — fail loud if a keyword is
+ *    incompatible with the target wire protocol
+ * 3. Return a clean ToolSchema matching the Gemini / Router wire spec
  */
 export function projectToolSchema(
   schema: ToolSchema,
-  profile: GeminiWireProfile
+  profile: GeminiWireProfile,
 ): ToolSchema {
   const projectedParams = projectJsonSchemaNode(
     schema.name,
     '',
     schema.parameters,
-    profile
-  );
+    profile,
+  )
 
   return {
     name: schema.name,
     description: schema.description,
     parameters: projectedParams,
-  };
+  }
 }
 
 function projectJsonSchemaNode(
   toolName: string,
   currentPath: string,
   node: unknown,
-  profile: GeminiWireProfile
+  profile: GeminiWireProfile,
 ): Record<string, unknown> {
   if (!node || typeof node !== 'object' || Array.isArray(node)) {
-    return (node ?? {}) as Record<string, unknown>;
+    return (node ?? {}) as Record<string, unknown>
   }
 
-  const record = node as Record<string, unknown>;
-  const result: Record<string, unknown> = {};
+  const record = node as Record<string, unknown>
+  const result: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(record)) {
-    // 移除不影响具体类型约束的 $schema 标头
+    // Strip $schema header — does not affect validation semantics
     if (key === '$schema') {
-      continue;
+      continue
     }
 
     if (key === 'properties' && value && typeof value === 'object') {
-      const projectedProps: Record<string, unknown> = {};
+      const projectedProps: Record<string, unknown> = {}
       for (const [propName, propDef] of Object.entries(value as Record<string, unknown>)) {
         projectedProps[propName] = projectJsonSchemaNode(
           toolName,
           `${currentPath}.${propName}`,
           propDef,
-          profile
-        );
+          profile,
+        )
       }
-      result[key] = projectedProps;
+      result[key] = projectedProps
     } else if (key === 'items') {
       if (Array.isArray(value)) {
         result[key] = value.map((item, idx) =>
-          projectJsonSchemaNode(toolName, `${currentPath}.items[${idx}]`, item, profile)
-        );
+          projectJsonSchemaNode(toolName, `${currentPath}.items[${idx}]`, item, profile),
+        )
       } else if (value && typeof value === 'object') {
         result[key] = projectJsonSchemaNode(
           toolName,
           `${currentPath}.items`,
           value,
-          profile
-        );
+          profile,
+        )
       } else {
-        result[key] = value;
+        result[key] = value
       }
     } else {
-      result[key] = value;
+      result[key] = value
     }
   }
 
-  return result;
+  return result
 }

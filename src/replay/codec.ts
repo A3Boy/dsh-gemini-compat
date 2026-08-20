@@ -1,111 +1,99 @@
-import { GeminiCompatReplayState, SupportedProtocol } from './state.js';
-import { GeminiProtocolError } from '../adapter/errors.js';
+import type { ReplayEnvelope } from '@deepseek-ai/dsh-llm'
 
-export interface ReplayCodec {
-  extractMetadata(response: any): GeminiCompatReplayState;
-  injectMetadata(messages: any[], state: GeminiCompatReplayState): any[];
-}
-
-export type CodecStrategy = 'google-standard' | 'extra-content' | 'openrouter-reasoning' | 'passthrough';
+export type CodecStrategy = 'google-standard' | 'extra-content' | 'openrouter-reasoning' | 'passthrough'
 
 /**
- * 严格按照特定 Route 配置的 Codec 实现元数据提取与注入。
- * 绝不同时喷洒（spray）多种字段到同一个请求。
+ * Route-specific replay codec that extracts and injects provider metadata
+ * (thought signatures, reasoning details) using exactly one strategy per route.
+ * Never sprays multiple fields onto the same request.
+ *
+ * The envelope follows the official DSH {@link ReplayEnvelope} shape:
+ * `response` holds response-level metadata; `blocks` holds per-block metadata
+ * in first-seen stream order.
  */
-export class RouteSpecificReplayCodec implements ReplayCodec {
+export class RouteSpecificReplayCodec {
+  private pendingReplayState: ReplayEnvelope | undefined
+
   constructor(
-    private readonly strategy: CodecStrategy = 'google-standard',
-    private readonly protocol: string = 'openai-chat'
-  ) {
-    if (protocol !== 'openai-chat') {
-      throw new GeminiProtocolError(
-        `Unsupported protocol "${protocol}". V1 only supports "openai-chat". Native Gemini protocol is reserved for future releases.`,
-        'UNSUPPORTED'
-      );
-    }
+    readonly strategy: CodecStrategy = 'google-standard',
+  ) {}
+
+  /**
+   * Store the replay envelope produced by the stream translator so the
+   * serializer can inject it into the next request's messages.
+   */
+  setPendingReplayState(envelope: ReplayEnvelope): void {
+    this.pendingReplayState = envelope
   }
 
-  extractMetadata(response: any): GeminiCompatReplayState {
-    const state: GeminiCompatReplayState = {
-      kind: 'dsh-gemini-compat',
-      version: 1,
-      protocol: 'openai-chat',
-      codecType: this.strategy,
-      responseId: response?.id,
-      thoughtSignatures: {},
-      reasoningDetails: [],
-    };
-
-    if (!response) return state;
-
-    if (this.strategy === 'google-standard') {
-      const choices = response.choices || [];
-      for (const choice of choices) {
-        const toolCalls = choice.message?.tool_calls || [];
-        for (const tc of toolCalls) {
-          if (tc.id && tc.thought_signature) {
-            state.thoughtSignatures![tc.id] = tc.thought_signature;
-          }
-        }
-      }
-    } else if (this.strategy === 'extra-content') {
-      const choices = response.choices || [];
-      for (const choice of choices) {
-        const extraGoogle = choice.message?.extra_content?.google;
-        const toolCalls = choice.message?.tool_calls || [];
-        for (const tc of toolCalls) {
-          if (tc.id && extraGoogle?.thought_signature?.[tc.id]) {
-            state.thoughtSignatures![tc.id] = extraGoogle.thought_signature[tc.id];
-          }
-        }
-      }
-    } else if (this.strategy === 'openrouter-reasoning') {
-      const reasoning = response.choices?.[0]?.message?.reasoning_details;
-      if (Array.isArray(reasoning)) {
-        state.reasoningDetails = reasoning;
-      }
-    }
-
-    return state;
+  /**
+   * Return the pending replay state and clear it (one-shot consumption).
+   */
+  getPendingReplayState(): ReplayEnvelope | undefined {
+    return this.pendingReplayState
   }
 
-  injectMetadata(messages: any[], state: GeminiCompatReplayState): any[] {
-    if (!state || !state.thoughtSignatures) return messages;
+  /**
+   * Extract per-block metadata from the replay envelope for a given block index.
+   */
+  getBlockMetadata(envelope: ReplayEnvelope | undefined, blockIndex: number): unknown {
+    if (envelope?.blocks === undefined) return undefined
+    return envelope.blocks[blockIndex]
+  }
 
-    return messages.map((msg) => {
-      if (msg.role !== 'assistant') return msg;
+  /**
+   * Inject replay metadata into wire messages for the next request.
+   * Only applies the configured single strategy — never sprays multiple fields.
+   */
+  injectMetadata(
+    messages: readonly Record<string, unknown>[],
+    envelope: ReplayEnvelope | undefined,
+  ): Record<string, unknown>[] {
+    if (envelope === undefined) return [...messages]
 
-      // 创建浅拷贝以防污染原始数据
-      const cloned = { ...msg };
+    const response = envelope.response as Record<string, unknown> | undefined
+    if (response === undefined) return [...messages]
 
-      if (cloned.tool_calls && Array.isArray(cloned.tool_calls)) {
-        cloned.tool_calls = cloned.tool_calls.map((tc: any) => {
-          const sig = state.thoughtSignatures?.[tc.id];
-          if (!sig) return { ...tc };
+    const thoughtSignatures = response['thoughtSignatures'] as Record<string, string> | undefined
+    const hasSignatures = thoughtSignatures !== undefined && Object.keys(thoughtSignatures).length > 0
 
-          const updatedTc = { ...tc };
+    if (this.strategy === 'google-standard' && hasSignatures) {
+      return messages.map((msg) => {
+        if (msg['role'] !== 'assistant' || !Array.isArray(msg['tool_calls'])) return msg
+        const cloned = { ...msg }
+        cloned['tool_calls'] = (msg['tool_calls'] as Record<string, unknown>[]).map((tc) => {
+          const id = tc['id'] as string | undefined
+          if (id === undefined) return tc
+          const sig = thoughtSignatures![id]
+          if (sig === undefined) return tc
+          return { ...tc, thought_signature: sig }
+        })
+        return cloned
+      })
+    }
 
-          // 仅按配置的单一策略进行精确注入
-          if (this.strategy === 'google-standard') {
-            updatedTc.thought_signature = sig;
-          } else if (this.strategy === 'extra-content') {
-            updatedTc.extra_content = {
-              ...(updatedTc.extra_content || {}),
-              google: {
-                ...(updatedTc.extra_content?.google || {}),
-                thought_signature: sig,
-              },
-            };
+    if (this.strategy === 'extra-content' && hasSignatures) {
+      return messages.map((msg) => {
+        if (msg['role'] !== 'assistant' || !Array.isArray(msg['tool_calls'])) return msg
+        const cloned = { ...msg }
+        cloned['tool_calls'] = (msg['tool_calls'] as Record<string, unknown>[]).map((tc) => {
+          const id = tc['id'] as string | undefined
+          if (id === undefined) return tc
+          const sig = thoughtSignatures![id]
+          if (sig === undefined) return tc
+          return {
+            ...tc,
+            extra_content: {
+              ...((tc['extra_content'] as Record<string, unknown> | undefined) ?? {}),
+              google: { thought_signature: sig },
+            },
           }
-          return updatedTc;
-        });
-      }
+        })
+        return cloned
+      })
+    }
 
-      if (this.strategy === 'openrouter-reasoning' && state.reasoningDetails && state.reasoningDetails.length > 0) {
-        cloned.reasoning_details = state.reasoningDetails;
-      }
-
-      return cloned;
-    });
+    // openrouter-reasoning and passthrough: no thought_signature injection
+    return [...messages]
   }
 }

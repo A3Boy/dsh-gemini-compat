@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { projectToolSchema } from '../src/schema/project.js';
-import { ToolSchema } from '../src/diagnostics/trace.js';
+import { describe, it, expect } from 'vitest'
+import { projectToolSchema } from '../src/schema/project.js'
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 
 describe('Lossless Schema Projection', () => {
   it('should remove $schema without losing validation semantics', () => {
@@ -16,15 +16,15 @@ describe('Lossless Schema Projection', () => {
         },
         required: ['command', 'description'],
       },
-    };
+    }
 
-    const projected = projectToolSchema(input, { target: 'openai-chat' });
+    const projected = projectToolSchema(input, { target: 'openai-chat' })
 
-    expect(projected.name).toBe('pwsh');
-    expect(projected.parameters.$schema).toBeUndefined();
-    expect((projected.parameters.properties as any).command.type).toBe('string');
-    expect(projected.parameters.required).toEqual(['command', 'description']);
-  });
+    expect(projected.name).toBe('pwsh')
+    expect(projected.parameters.$schema).toBeUndefined()
+    expect(projected.parameters.properties!.command!.type).toBe('string')
+    expect(projected.parameters.required).toEqual(['command', 'description'])
+  })
 
   it('should recursively project nested schemas', () => {
     const input: ToolSchema = {
@@ -43,11 +43,35 @@ describe('Lossless Schema Projection', () => {
           },
         },
       },
-    };
+    }
 
-    const projected = projectToolSchema(input, { target: 'openai-chat' });
-    expect(projected.parameters.$schema).toBeUndefined();
-    expect((projected.parameters.properties as any).meta.$schema).toBeUndefined();
-    expect((projected.parameters.properties as any).meta.properties.name.type).toBe('string');
-  });
-});
+    const projected = projectToolSchema(input, { target: 'openai-chat' })
+    expect(projected.parameters.$schema).toBeUndefined()
+    expect(projected.parameters.properties!.meta!.$schema).toBeUndefined()
+    expect(projected.parameters.properties!.meta!.properties!.name!.type).toBe('string')
+  })
+
+  it('should project array items', () => {
+    const input: ToolSchema = {
+      name: 'batch',
+      description: 'Batch operation',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              $schema: 'http://json-schema.org/schema#',
+              type: 'object',
+              properties: { id: { type: 'string' } },
+            },
+          },
+        },
+      },
+    }
+
+    const projected = projectToolSchema(input, { target: 'openai-chat' })
+    expect(projected.parameters.properties!.items!.items!.$schema).toBeUndefined()
+    expect(projected.parameters.properties!.items!.items!.properties!.id!.type).toBe('string')
+  })
+})

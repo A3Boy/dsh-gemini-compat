@@ -1,68 +1,69 @@
-import { describe, it, expect } from 'vitest';
-import {
-  formatInvalidArgsFeedback,
-  enhanceInvalidArgsPostExecute,
-} from '../src/feedback/invalid-args.js';
+import { describe, it, expect } from 'vitest'
+import { formatInvalidArgsFeedback } from '../src/feedback/invalid-args.js'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 
 describe('INVALID_ARGS Feedback Enhancer', () => {
   it('should format clean, diagnostic feedback without tool-specific branching', () => {
+    const result: ToolExecutionResult = {
+      isError: true,
+      error: {
+        message: 'invalid arguments: missing required property "command"',
+        info: { code: 'INVALID_ARGS', name: 'pwsh' },
+      },
+      content: [],
+    }
+
     const feedback = formatInvalidArgsFeedback(
-      {
-        name: 'pwsh',
-        arguments: { description: 'Git commit and push changes' },
+      'pwsh',
+      { description: 'Git commit and push changes' },
+      result,
+    )
+
+    expect(feedback).toContain('Tool call rejected before execution.')
+    expect(feedback).toContain('Tool: pwsh')
+    expect(feedback).toContain('missing required property "command"')
+    expect(feedback).toContain('The tool did not execute.')
+  })
+
+  it('should include the provided arguments for model self-correction', () => {
+    const result: ToolExecutionResult = {
+      isError: true,
+      error: {
+        message: 'invalid arguments: missing required property "connection_id"',
+        info: { code: 'INVALID_ARGS', name: 'database_query' },
       },
-      {
-        isError: true,
-        error: {
-          message: 'invalid arguments: missing required property "command"',
-          info: { code: 'INVALID_ARGS' },
-        },
-      }
-    );
+      content: [],
+    }
 
-    expect(feedback).toContain('Tool call rejected before execution.');
-    expect(feedback).toContain('Tool: pwsh');
-    expect(feedback).toContain('missing required property "command"');
-    expect(feedback).toContain('The tool did not execute.');
-  });
+    const feedback = formatInvalidArgsFeedback(
+      'database_query',
+      { sql: 'SELECT * FROM users' },
+      result,
+    )
 
-  it('should catch INVALID_ARGS code and return overrideContent decision', () => {
-    const decision = enhanceInvalidArgsPostExecute(
-      {
-        name: 'database_query',
-        arguments: { sql: 'SELECT * FROM users' },
+    expect(feedback).toContain('Tool: database_query')
+    expect(feedback).toContain('sql')
+    expect(feedback).toContain('SELECT * FROM users')
+    expect(feedback).toContain('connection_id')
+  })
+
+  it('should use error.message when no violations array is available', () => {
+    const result: ToolExecutionResult = {
+      isError: true,
+      error: {
+        message: 'invalid arguments: missing required property "file_path"',
+        info: { code: 'INVALID_ARGS', name: 'edit' },
       },
-      {
-        isError: true,
-        error: {
-          info: {
-            code: 'INVALID_ARGS',
-            violations: ['missing required property "connection_id"'],
-          },
-        },
-      }
-    );
+      content: [],
+    }
 
-    expect(decision).not.toBeNull();
-    expect(decision?.overrideContent).toContain('Tool: database_query');
-    expect(decision?.overrideContent).toContain('missing required property "connection_id"');
-  });
+    const feedback = formatInvalidArgsFeedback(
+      'edit',
+      { new_string: 'test' },
+      result,
+    )
 
-  it('should return null for non-contract business errors', () => {
-    const decision = enhanceInvalidArgsPostExecute(
-      {
-        name: 'pwsh',
-        arguments: { command: 'Get-NonExistentCommand', description: 'Run command' },
-      },
-      {
-        isError: true,
-        error: {
-          message: 'CommandNotFoundException',
-          info: { code: 'COMMAND_FAILED' },
-        },
-      }
-    );
-
-    expect(decision).toBeNull();
-  });
-});
+    expect(feedback).toContain('missing required property "file_path"')
+    expect(feedback).toContain('Tool: edit')
+  })
+})
