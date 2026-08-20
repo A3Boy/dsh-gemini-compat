@@ -73,6 +73,13 @@ export class GeminiCompatAdapter extends LlmAdapter {
 
     let response: Response
     try {
+      // Debug: log the tool schemas we're actually sending
+      if (body.tools !== undefined && body.tools.length > 0) {
+        for (const t of body.tools) {
+          const reqField = t.function as Record<string, unknown>
+          console.error(`[dsh-gemini-compat] tool=${t.function.name} strict=${reqField['strict']} required=${JSON.stringify((t.function.parameters as Record<string, unknown>)['required'])} desc_first_80=${t.function.description.slice(0, 80)}`)
+        }
+      }
       response = await fetch(endpoint, {
         method: 'POST',
         headers,
