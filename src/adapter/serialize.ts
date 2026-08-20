@@ -154,6 +154,10 @@ function serializeTools(tools: readonly ToolSchema[] | undefined): WireTool[] | 
         name: projected.name,
         description: projected.description,
         parameters: projected.parameters,
+        // Force the provider to generate arguments that strictly follow the
+        // JSON Schema `required` list. Without this, Gemini thinking models
+        // commonly omit required properties and the call fails INVALID_ARGS.
+        strict: true,
       },
     }
   })
