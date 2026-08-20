@@ -1,19 +1,23 @@
+export type SupportedProtocol = 'openai-chat';
+
 export interface GeminiCompatReplayState {
   kind: 'dsh-gemini-compat';
   version: 1;
-  protocol: 'openai-chat' | 'gemini-native';
+  protocol: SupportedProtocol;
+  codecType: 'google-standard' | 'extra-content' | 'openrouter-reasoning' | 'passthrough';
   responseId?: string;
   thoughtSignatures?: Record<string, string>; // tool_call_id -> signature string
   reasoningDetails?: unknown[];
 }
 
 export function createEmptyReplayState(
-  protocol: 'openai-chat' | 'gemini-native' = 'openai-chat'
+  codecType: 'google-standard' | 'extra-content' | 'openrouter-reasoning' | 'passthrough' = 'google-standard'
 ): GeminiCompatReplayState {
   return {
     kind: 'dsh-gemini-compat',
     version: 1,
-    protocol,
+    protocol: 'openai-chat',
+    codecType,
     thoughtSignatures: {},
   };
 }

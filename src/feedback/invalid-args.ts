@@ -25,9 +25,10 @@ export interface PostToolDecision {
  * 
  * 遵守架构规范：
  * 1. 绝不写 `if (exec.name === 'pwsh')` 等具体工具特判
- * 2. 仅在 code === "INVALID_ARGS" 时介入
- * 3. 明确向模型传达：工具未实际执行，请参考 schema 提供完整参数后重试
- * 4. 不引入自动重试状态机，让 DSH Agent Loop 自然驱动
+ * 2. 严格仅在 result.isError === true 且 info.code === "INVALID_ARGS" 时介入
+ * 3. 绝不通过字符串匹配/文本猜测来介入，防止对非 schema 错误产生副作用误判
+ * 4. 明确向模型传达：工具未实际执行，请参考 schema 提供完整参数后重试
+ * 5. 不引入自动重试状态机，由 DSH Agent Loop 自然决策
  */
 export function formatInvalidArgsFeedback(
   exec: ToolExecutionDetail,
@@ -36,13 +37,12 @@ export function formatInvalidArgsFeedback(
   const argsFormatted =
     typeof exec.arguments === 'string'
       ? exec.arguments
-      : JSON.stringify(exec.arguments, null, 2);
+    : JSON.stringify(exec.arguments, null, 2);
 
   const violationMessage =
-    result.error?.message ||
-    (result.error?.info?.violations
+    (result.error?.info?.violations && result.error.info.violations.length > 0)
       ? result.error.info.violations.join('; ')
-      : 'Arguments did not adhere to required JSON schema');
+      : result.error?.message || 'Arguments did not adhere to required JSON schema';
 
   return [
     'Tool call rejected before execution.',
@@ -64,9 +64,7 @@ export function enhanceInvalidArgsPostExecute(
 ): PostToolDecision | null {
   if (
     result.isError &&
-    (result.error?.info?.code === 'INVALID_ARGS' ||
-      result.error?.message?.includes('invalid arguments') ||
-      result.error?.message?.includes('missing required property'))
+    result.error?.info?.code === 'INVALID_ARGS'
   ) {
     return {
       overrideContent: formatInvalidArgsFeedback(exec, result),

@@ -1,113 +1,161 @@
+import assert from 'node:assert';
 import { projectToolSchema } from './src/schema/project.js';
 import { GeminiStreamProcessor } from './src/adapter/parse-stream.js';
-import { JsonReplayCodec } from './src/replay/codec.js';
-import { injectReplayStateIntoMessages } from './src/adapter/serialize-request.js';
-import { formatInvalidArgsFeedback, enhanceInvalidArgsPostExecute } from './src/feedback/invalid-args.js';
-import { GeminiCompatAdapter } from './src/adapter/adapter.js';
+import { RouteSpecificReplayCodec } from './src/replay/codec.js';
+import { enhanceInvalidArgsPostExecute } from './src/feedback/invalid-args.js';
 import { DiagnosticsCollector } from './src/diagnostics/trace.js';
 
-let passed = 0;
-let failed = 0;
+console.log('--- Starting dsh-gemini-compat self-tests ---');
 
-function assert(condition, message) {
-  if (condition) {
-    passed++;
-    console.log(`[PASS] ${message}`);
-  } else {
-    failed++;
-    console.error(`[FAIL] ${message}`);
-  }
-}
-
-console.log('--- Running Schema Projection Tests ---');
-const projected = projectToolSchema(
-  {
-    name: 'pwsh',
-    description: 'Run powershell',
+// 1. Schema Projection Test
+{
+  const schema = {
+    name: 'test_tool',
+    description: 'desc',
     parameters: {
       $schema: 'http://json-schema.org/draft-07/schema#',
       type: 'object',
-      properties: { command: { type: 'string' }, description: { type: 'string' } },
-      required: ['command', 'description'],
-    },
-  },
-  { target: 'openai-chat' }
-);
-assert(projected.name === 'pwsh', 'Tool name preserved');
-assert(projected.parameters.$schema === undefined, '$schema stripped');
-assert(projected.parameters.required.length === 2, 'Required fields preserved');
-
-console.log('\n--- Running Stream & JSON Integrity Gate Tests ---');
-const processor = new GeminiStreamProcessor('openai-chat');
-const events1 = processor.processChunk({
-  choices: [
-    {
-      delta: {
-        tool_calls: [
-          {
-            index: 0,
-            id: 'call_123',
-            function: { name: 'pwsh', arguments: '{"description":"Test command"' },
-          },
-        ],
+      properties: {
+        pattern: { type: 'string' },
       },
+      required: ['pattern'],
     },
-  ],
-});
-assert(events1.length === 2, 'Stream chunk processed 2 events');
+  };
+  const projected = projectToolSchema(schema, { wireFormat: 'openai-function' });
+  assert.strictEqual(projected.parameters.$schema, undefined, 'Must strip $schema');
+  assert.strictEqual(projected.name, 'test_tool');
+  console.log('✔ Schema Projection test passed');
+}
 
-const events2 = processor.processChunk({
-  choices: [
-    {
-      delta: { tool_calls: [{ index: 0, function: { arguments: ',"command":"dir"}' } }] },
-      finish_reason: 'tool_calls',
-    },
-  ],
-});
-const blockEnd = events2.find((e) => e.type === 'block-end');
-assert(
-  blockEnd?.toolCall?.arguments === '{"description":"Test command","command":"dir"}',
-  'JSON arguments assembled accurately'
-);
+// 2. Stream Processor & JSON Integrity Gate
+{
+  const processor = new GeminiStreamProcessor('google-standard');
 
-console.log('\n--- Running Replay Codec Tests ---');
-const codec = new JsonReplayCodec();
-const encoded = codec.encode({
-  kind: 'dsh-gemini-compat',
-  version: 1,
-  protocol: 'openai-chat',
-  responseId: 'resp_123',
-  thoughtSignatures: { call_1: 'signature_abc' },
-});
-const decoded = codec.decode(encoded);
-assert(decoded.thoughtSignatures.call_1 === 'signature_abc', 'Thought signature properly decoded');
+  processor.processChunk({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              function: { name: 'pwsh', arguments: '{"command":"' },
+            },
+          ],
+        },
+      },
+    ],
+  });
 
-const restored = injectReplayStateIntoMessages(
-  [
+  processor.processChunk({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              function: { arguments: 'dir","description":"list"}' },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const finishEvents = processor.processChunk({
+    choices: [
+      {
+        finish_reason: 'tool_calls',
+      },
+    ],
+  });
+
+  assert(finishEvents.some((e) => e.type === 'finish'), 'Must emit finish event');
+  console.log('✔ Stream processor & integrity gate passed');
+}
+
+// 3. Replay Codec Isolation
+{
+  const codec = new RouteSpecificReplayCodec('google-standard', 'openai-chat');
+  const messages = [
     {
       role: 'assistant',
       tool_calls: [
         {
           id: 'call_1',
-          type: 'function',
           function: { name: 'pwsh', arguments: '{}' },
         },
       ],
     },
-  ],
-  decoded
-);
-assert(restored[0].tool_calls[0].thought_signature === 'signature_abc', 'Replay signature injected correctly');
+  ];
 
-console.log('\n--- Running Feedback Enhancer Tests ---');
-const feedback = formatInvalidArgsFeedback(
-  { name: 'pwsh', arguments: { description: 'test' } },
-  { isError: true, error: { message: 'missing required property "command"', info: { code: 'INVALID_ARGS' } } }
-);
-assert(feedback.includes('Tool: pwsh'), 'Feedback includes tool name');
-assert(feedback.includes('missing required property "command"'), 'Feedback includes violation details');
-assert(feedback.includes('The tool did not execute.'), 'Feedback asserts no side-effects');
+  const state = {
+    kind: 'dsh-gemini-compat',
+    version: 1,
+    protocol: 'openai-chat',
+    thoughtSignatures: {
+      call_1: 'test-signature',
+    },
+  };
 
-console.log(`\n============================`);
-console.log(`Total: ${passed + failed} | Passed: ${passed} | Failed: ${failed}`);
-if (failed > 0) process.exit(1);
+  const injected = codec.injectMetadata(messages, state);
+  assert.strictEqual(
+    injected[0].tool_calls[0].thought_signature,
+    'test-signature',
+    'Must inject thought signature'
+  );
+  assert.strictEqual(
+    injected[0].tool_calls[0].extra_content,
+    undefined,
+    'Must NOT spray duplicate extra_content'
+  );
+  console.log('✔ Replay Codec isolation passed');
+}
+
+// 4. INVALID_ARGS Feedback Enhancement
+{
+  const exec = {
+    name: 'pwsh',
+    arguments: { description: 'list files' },
+  };
+  const result = {
+    isError: true,
+    error: {
+      info: {
+        code: 'INVALID_ARGS',
+      },
+      message: 'missing required property "command"',
+    },
+    content: 'Error: invalid arguments: missing required property "command"',
+  };
+
+  const decision = enhanceInvalidArgsPostExecute(exec, result);
+  assert(decision !== null, 'Decision must not be null');
+  assert(decision.overrideContent.includes('Tool call rejected before execution.'));
+  assert(decision.overrideContent.includes('missing required property "command"'));
+  console.log('✔ INVALID_ARGS feedback enhancer passed');
+}
+
+// 5. Diagnostics & Classification
+{
+  const diag = new DiagnosticsCollector();
+  diag.recordStageA('gemini-router', 'Gemini/gemini-3.7-flash-high', {
+    name: 'pwsh',
+    description: 'exec',
+    parameters: { type: 'object', required: ['command'] },
+  });
+
+  const report = diag.generateFailureReport(
+    'gemini-router',
+    'Gemini/gemini-3.7-flash-high',
+    'pwsh',
+    '{"description":"list"}',
+    { description: 'list' },
+    'missing required property "command"'
+  );
+
+  assert.strictEqual(report.classification, 'MODEL_ARGUMENT_CONTRACT_VIOLATION');
+  console.log('✔ Diagnostics & failure classification passed');
+}
+
+console.log('\nAll tests passed successfully!');

@@ -15,15 +15,19 @@ export type FailureClassification =
   | 'UNKNOWN';
 
 export interface TraceStageA {
+  route: string;
+  model: string;
   tool: string;
   schemaHash: string;
   topLevelRequired: string[];
 }
 
 export interface TraceStageB {
-  wireToolsCount: number;
+  route: string;
+  model: string;
+  tool: string;
+  wireToolName: string;
   toolsHash: string;
-  toolNames: string[];
 }
 
 export interface TraceStageC {
@@ -54,7 +58,25 @@ export interface TelemetryMetrics {
   gemini_repeated_same_invalid_args_total: number;
 }
 
+export interface FailureReport {
+  provider: string;
+  model: string;
+  tool: string;
+  requestSchemaHash?: string;
+  providerRawArguments: string;
+  assembledArguments: Record<string, unknown> | null;
+  validation: {
+    status: 'VALID' | 'INVALID_ARGS';
+    message?: string;
+  };
+  classification: FailureClassification;
+}
+
 export class DiagnosticsCollector {
+  private stageARecords: Map<string, TraceStageA> = new Map();
+  private stageBRecords: Map<string, TraceStageB> = new Map();
+  private stageDRecords: TraceStageD[] = [];
+
   private metrics: TelemetryMetrics = {
     gemini_tool_calls_total: 0,
     gemini_invalid_args_total: 0,
@@ -68,15 +90,6 @@ export class DiagnosticsCollector {
     gemini_repeated_same_invalid_args_total: 0,
   };
 
-  private traces: Array<{
-    timestamp: number;
-    stageA?: TraceStageA;
-    stageB?: TraceStageB;
-    stageC?: TraceStageC[];
-    stageD?: TraceStageD;
-    classification?: FailureClassification;
-  }> = [];
-
   public static hashSchema(schema: ToolSchema): string {
     const canonical = JSON.stringify({
       name: schema.name,
@@ -85,25 +98,40 @@ export class DiagnosticsCollector {
     return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
   }
 
-  public recordStageA(schema: ToolSchema): TraceStageA {
+  public recordStageA(route: string, model: string, schema: ToolSchema): TraceStageA {
     const required = Array.isArray((schema.parameters as any)?.required)
       ? ((schema.parameters as any).required as string[])
       : [];
-    return {
+    const record: TraceStageA = {
+      route,
+      model,
       tool: schema.name,
       schemaHash: DiagnosticsCollector.hashSchema(schema),
       topLevelRequired: required,
     };
+    this.stageARecords.set(schema.name, record);
+    return record;
   }
 
-  public recordStageB(wireTools: Array<{ type: string; function?: { name: string; parameters?: unknown } }>): TraceStageB {
-    const toolNames = wireTools.map((t) => t.function?.name ?? 'unknown');
-    const hash = createHash('sha256').update(JSON.stringify(wireTools)).digest('hex').slice(0, 16);
-    return {
-      wireToolsCount: wireTools.length,
+  public getStageA(toolName: string): TraceStageA | undefined {
+    return this.stageARecords.get(toolName);
+  }
+
+  public recordStageB(route: string, model: string, schema: ToolSchema, wireToolName: string): TraceStageB {
+    const hash = DiagnosticsCollector.hashSchema(schema);
+    const record: TraceStageB = {
+      route,
+      model,
+      tool: schema.name,
+      wireToolName,
       toolsHash: hash,
-      toolNames,
     };
+    this.stageBRecords.set(schema.name, record);
+    return record;
+  }
+
+  public recordStageD(record: TraceStageD): void {
+    this.stageDRecords.push(record);
   }
 
   public classifyFailure(
@@ -133,11 +161,10 @@ export class DiagnosticsCollector {
       try {
         parsedRaw = JSON.parse(rawProviderArgs);
       } catch {
-        // Raw was not valid json
+        // raw string was not valid json
       }
 
       if (parsedRaw) {
-        // Check if raw had the missing fields that assembled dropped
         const rawKeys = Object.keys(parsedRaw);
         const assembledKeys = Object.keys(assembledArgs);
         const missingInAssembled = rawKeys.filter((k) => !assembledKeys.includes(k));
@@ -151,6 +178,39 @@ export class DiagnosticsCollector {
     }
 
     return 'UNKNOWN';
+  }
+
+  public generateFailureReport(
+    provider: string,
+    model: string,
+    tool: string,
+    rawProviderArgs: string,
+    assembledArgs: Record<string, unknown> | null,
+    validationError?: string,
+    isStreamTruncated = false
+  ): FailureReport {
+    const classification = this.classifyFailure(
+      rawProviderArgs,
+      assembledArgs,
+      validationError,
+      isStreamTruncated
+    );
+
+    const stageA = this.stageARecords.get(tool);
+
+    return {
+      provider,
+      model,
+      tool,
+      requestSchemaHash: stageA?.schemaHash,
+      providerRawArguments: rawProviderArgs,
+      assembledArguments: assembledArgs,
+      validation: {
+        status: validationError ? 'INVALID_ARGS' : 'VALID',
+        message: validationError,
+      },
+      classification,
+    };
   }
 
   public getMetrics(): Readonly<TelemetryMetrics> {

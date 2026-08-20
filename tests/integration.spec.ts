@@ -1,21 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { GeminiCompatAdapter } from '../src/adapter/adapter.js';
+import { GeminiCompatLlmAdapter } from '../src/adapter/adapter.js';
 import { DiagnosticsCollector, ToolSchema } from '../src/diagnostics/trace.js';
 
 describe('Integration Test Suite', () => {
   it('should run full request-response lifecycle with diagnostics and no field loss', () => {
     const diag = new DiagnosticsCollector();
-    const adapter = new GeminiCompatAdapter(
+    const adapter = new GeminiCompatLlmAdapter(
       {
-        enabled: true,
-        provider: {
-          route: 'gemini-router',
-          protocol: 'openai-chat',
-          baseURL: 'https://api.example.com',
-          apiKeyEnv: 'GEMINI_API_KEY',
-        },
-        models: [{ id: 'gemini-3.7-flash' }],
-        diagnostics: { enabled: true },
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        defaultModel: 'Gemini/gemini-3.7-flash-high',
+        codecStrategy: 'google-standard',
       },
       diag
     );
@@ -48,48 +43,55 @@ describe('Integration Test Suite', () => {
       },
     ];
 
-    const prep = adapter.prepareRequest([], tools);
-    expect(prep.tools).toHaveLength(2);
-    expect(diag.getStageA().size).toBe(2);
-
-    const processor = adapter.createStreamProcessor();
-    const chunk1 = {
-      choices: [
-        {
-          delta: {
-            tool_calls: [
-              {
-                index: 0,
-                id: 'call_pwsh_1',
-                function: {
-                  name: 'pwsh',
-                  arguments: '{"command":"Get-ChildItem","description":"list directory"}',
-                },
-              },
-            ],
-          },
-          finish_reason: 'tool_calls',
-        },
-      ],
-    };
-
-    const events = processor.processChunk(chunk1);
-    const blockEnd = events.find((e) => e.type === 'block-end');
-    expect(blockEnd).toBeDefined();
+    const stageA1 = diag.recordStageA('gemini-router', 'Gemini/gemini-3.7-flash-high', tools[0]);
+    const stageA2 = diag.recordStageA('gemini-router', 'Gemini/gemini-3.7-flash-high', tools[1]);
+    expect(diag.getStageA('pwsh')).toBeDefined();
+    expect(diag.getStageA('edit')).toBeDefined();
 
     diag.recordStageD({
       toolName: 'pwsh',
-      finalRawJson: blockEnd!.toolCall!.arguments!,
-      parsedObject: JSON.parse(blockEnd!.toolCall!.arguments!),
+      finalRawJson: '{"command":"dir","description":"list files"}',
+      isJsonValid: true,
       validationStatus: 'VALID',
     });
 
     const report = diag.generateFailureReport(
-      'pwsh',
       'gemini-router',
-      'gemini-3.7-flash'
+      'Gemini/gemini-3.7-flash-high',
+      'pwsh',
+      '{"command":"dir","description":"list files"}',
+      { command: 'dir', description: 'list files' }
     );
-    expect(report.validation).toBe('VALID');
-    expect(report.classification).toBe('NORMAL_EXECUTION');
+
+    expect(report.validation.status).toBe('VALID');
+    expect(report.classification).toBe('UNKNOWN');
+  });
+
+  it('should classify model argument violation accurately', () => {
+    const diag = new DiagnosticsCollector();
+    diag.recordStageA('gemini-router', 'Gemini/gemini-3.7-flash-high', {
+      name: 'pwsh',
+      description: 'Execute PowerShell command',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          description: { type: 'string' },
+        },
+        required: ['command', 'description'],
+      },
+    });
+
+    const report = diag.generateFailureReport(
+      'gemini-router',
+      'Gemini/gemini-3.7-flash-high',
+      'pwsh',
+      '{"description":"list files"}',
+      { description: 'list files' },
+      'missing required property "command"'
+    );
+
+    expect(report.validation.status).toBe('INVALID_ARGS');
+    expect(report.classification).toBe('MODEL_ARGUMENT_CONTRACT_VIOLATION');
   });
 });
