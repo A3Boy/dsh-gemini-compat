@@ -89,7 +89,7 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
       if (decision.kind !== 'accept') return decision
       if ('value' in decision && decision.value !== undefined) return decision
 
-      const feedbackText = formatInvalidArgsFeedback(result)
+      const feedbackText = formatInvalidArgsFeedback(exec.name, exec.arguments, result)
 
       return {
         kind: 'accept',

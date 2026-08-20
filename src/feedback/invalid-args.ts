@@ -8,25 +8,47 @@ export function isInvalidArgsResult(result: Readonly<ToolExecutionResult>): bool
   )
 }
 
+/**
+ * Format a highly actionable INVALID_ARGS feedback that tells the model:
+ * 1. The tool call was rejected BEFORE execution (no side effects happened).
+ * 2. Which tool it was.
+ * 3. What arguments were actually provided (so the model can see the gap).
+ * 4. The specific validation error.
+ * 5. An explicit instruction to re-check the schema and retry completely.
+ */
 export function formatInvalidArgsFeedback(
-  result: Readonly<ToolExecutionResult>
+  toolName: string,
+  args: unknown,
+  result: Readonly<ToolExecutionResult>,
 ): string {
-  const parts: string[] = ['The tool execution failed because the provided arguments were invalid.']
+  const argsFormatted =
+    typeof args === 'string'
+      ? args.trim()
+      : JSON.stringify(args, null, 2) ?? String(args)
 
-  if (result.error?.message) {
-    parts.push('Error: ' + result.error.message)
-  }
+  const violationMessage = result.isError
+    ? result.error.message || 'Arguments did not adhere to required JSON schema'
+    : 'Arguments did not adhere to required JSON schema'
 
-  parts.push(
-    'Please review the tool schema, ensure all required properties are provided with valid types, and try again.'
-  )
-
-  return parts.join('\n\n')
+  return [
+    'Tool call rejected before execution.',
+    `Tool: ${toolName}`,
+    '',
+    'Provided arguments:',
+    argsFormatted,
+    '',
+    'Validation error:',
+    violationMessage,
+    '',
+    "The tool did NOT execute and no side effects occurred. Re-check this tool's declared schema: the required property is missing or has an invalid type. Retry with a COMPLETE argument object that satisfies every required property. Do not invent parameter names and do not omit required fields.",
+  ].join('\n')
 }
 
 export async function handleInvalidArgsPostExecute(
+  toolName: string,
+  args: unknown,
   result: Readonly<ToolExecutionResult>,
-  next: () => Promise<PostToolDecision>
+  next: () => Promise<PostToolDecision>,
 ): Promise<PostToolDecision> {
   const decision = await next()
 
@@ -34,17 +56,17 @@ export async function handleInvalidArgsPostExecute(
     return decision
   }
 
-  // If the downstream decision is already a block or non-accept, honor it
+  // Preserve downstream decisions: never override a non-accept decision
   if (decision.kind !== 'accept') {
     return decision
   }
 
-  // If the downstream decision has custom value assignment, do not overwrite
-  if ('value' in decision && (decision as { value?: unknown }).value !== undefined) {
+  // Preserve downstream value-bearing decisions
+  if ('value' in decision && decision.value !== undefined) {
     return decision
   }
 
-  const feedbackText = formatInvalidArgsFeedback(result)
+  const feedbackText = formatInvalidArgsFeedback(toolName, args, result)
 
   return {
     kind: 'accept',
