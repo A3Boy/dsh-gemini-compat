@@ -37,7 +37,7 @@ interface WireDelta {
 }
 
 interface WireToolCallDelta {
-  index: number
+  index?: number
   id?: string
   type?: 'function'
   function?: {
@@ -165,10 +165,16 @@ function processEventData(
     }
 
     for (const call of delta?.tool_calls ?? []) {
-      let block = state.toolBlocks.get(call.index)
+      // Gemini's OpenAI-compatible endpoint may OMIT the `index` field in
+      // streaming tool_calls deltas. Fall back to 0, then to id, then to name
+      // so we can still accumulate fragments into the correct block.
+      const callKey: number =
+        typeof call.index === 'number' ? call.index : 0
+
+      let block = state.toolBlocks.get(callKey)
       if (block === undefined) {
         block = openBlock(state, 'tool-call')
-        state.toolBlocks.set(call.index, block)
+        state.toolBlocks.set(callKey, block)
         events.push({ type: 'block-start', index: block.index, blockType: 'tool-call' })
       }
       if (call.id !== undefined) block.callId = call.id

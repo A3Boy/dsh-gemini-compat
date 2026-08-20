@@ -249,4 +249,47 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
     const finishIdx = chunks.findIndex((c) => c.type === 'finish')
     expect(finishIdx).toBe(chunks.length - 1)
   })
+
+  it('should handle Gemini streaming tool_calls without index field', async () => {
+    // Gemini's OpenAI-compatible endpoint may omit the `index` field
+    // in streaming tool_calls deltas. This test verifies the adapter
+    // still accumulates arguments correctly.
+    const codec = new RouteSpecificReplayCodec('google-openai')
+    const chunks = await collect(makeStream([
+      JSON.stringify({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              // No index field!
+              id: 'call_1',
+              function: { name: 'pwsh', arguments: '{"comm' },
+            }],
+          },
+        }],
+      }),
+      JSON.stringify({
+        choices: [{
+          delta: {
+            tool_calls: [{
+              // No index field!
+              function: { arguments: 'and":"Get-ChildItem"}' },
+            }],
+          },
+        }],
+      }),
+      DONE_MARKER,
+    ]), codec)
+
+    const blockEnd = chunks.find((c) => c.type === 'block-end')
+    expect(blockEnd).toBeDefined()
+    if (blockEnd && blockEnd.type === 'block-end') {
+      const block = blockEnd.block
+      expect(block.type).toBe('tool-call')
+      if (block.type === 'tool-call') {
+        expect(block.name).toBe('pwsh')
+        expect(block.arguments).toBe('{"command":"Get-ChildItem"}')
+        expect(JSON.parse(block.arguments)).toEqual({ command: 'Get-ChildItem' })
+      }
+    }
+  })
 })
