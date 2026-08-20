@@ -1,0 +1,10 @@
+- insert:
+    - id: gemini-compat
+      name: dsh-gemini-compat
+      config:
+        apiKeyEnv: GEMINI_API_KEY
+        baseURL: https://generativelanguage.googleapis.com/v1beta/openai
+        wireProfile: google-openai
+        defaultModel: gemini-2.0-flash
+        streamIdleTimeoutMs: 300000
+        enableDiagnostics: false

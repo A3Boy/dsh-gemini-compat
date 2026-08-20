@@ -1,24 +1,71 @@
 # dsh-gemini-compat
 
-Gemini tool calling compatibility adapter for DeepSeek Harness (DSH).
+Gemini OpenAI-compatible tool calling adapter plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-A provider adapter that translates OpenAI-compatible Gemini endpoints (Google AI, OpenRouter, etc.) into the official DSH `StreamChunk` protocol. Directly imports `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-tools` — no local mirror types.
+## Architecture
 
-## Features
+- **`extends LlmAdapter`**: Implements the official DSH `LlmAdapter` abstraction directly.
+- **DSH Block Lifecycle**: Maps SSE chunks into `block-start`, `text-delta`, `reasoning-delta`, `tool-call-delta`, `block-end`, `usage`, `finish`.
+- **JSON Integrity Gate**: Validates all tool-call arguments as well-formed JSON objects before emitting `block-end`.
+- **Deferred Completion**: Defers `usage` and `finish` until after `[DONE]`. Usage always precedes finish; nothing follows finish.
+- **Stateless Replay Codec**: Replays Gemini thought signatures (`extra_content.google.thought_signature`) reading from `message.source.replayState`.
+- **INVALID_ARGS Enhancement**: Corrects model-facing feedback while preserving structured error identity (`{ kind: 'accept', content: [...] }`).
 
-- **Official `LlmAdapter`**: `GeminiCompatAdapter extends LlmAdapter` with `stream(options: GenerateOptions): AsyncIterable<StreamChunk>`.
-- **DSH Block Lifecycle**: `block-start` → deltas → `block-end` with the assembled `ContentBlock`. Block indices are assigned independently from provider `tool_calls[].index`.
-- **Trailing Usage**: Finish reason and usage are deferred until `[DONE]`, so trailing usage-only chunks are captured. Usage always precedes finish; nothing follows finish.
-- **JSON Integrity Gate**: Tool-call arguments are validated as parseable JSON objects before `block-end` is emitted. Truncated arguments abort with `MALFORMED_RESPONSE`.
-- **Malformed SSE Detection**: Non-JSON SSE payloads throw `MALFORMED_RESPONSE` — never silently swallowed.
-- **SSE Truncation Detection**: Stream ending without `[DONE]` throws `STREAM_CLOSED`.
-- **Error Classification**: HTTP 401/403 → `AUTH`, 429 → `RATE_LIMIT`, 400 → `INVALID_REQUEST`, 500+ → `SERVER`, transport failures → `TRANSPORT`. Uses official `LlmError`.
-- **Attribution Headers**: Every provider request includes `attributionHeaders()`.
-- **Replay Metadata**: `RouteSpecificReplayCodec` preserves Gemini thought signatures using exactly one strategy per route (google-standard, extra-content, openrouter-reasoning, passthrough). Output follows the official `ReplayEnvelope` shape.
-- **INVALID_ARGS Feedback**: `ctx.on('tools/post-execute', ...)` returns the official `PostToolDecision` with structured `{ kind: 'block', feedback: ContentBlock[] }`. Strictly detects `result.error.info.code === 'INVALID_ARGS'` — no tool-specific branching.
-- **Credential Boundary**: API key resolved per request via `credentialRef` and `ctx.credentials`, with environment fallback.
-- **Schemastery Config**: `z.object()` schema for plugin configuration.
-- **Lossless Schema Projection**: Strips `$schema` while preserving all validation semantics.
+## Supported Wire Profiles
+
+- **`google-openai`** (default): Google's OpenAI-compatible endpoint. Captures and replays `extra_content.google.thought_signature`.
+- **`generic-openai`**: Generic OpenAI-compatible endpoints with standard tool calls.
+
+## Installation in DSH
+
+### Option 1: DSH Profile Bundle
+
+Add to your `package.json`'s `dsh.profile.bundles` if working within a DSH workspace:
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": ["dsh-gemini-compat"]
+    }
+  }
+}
+```
+
+### Option 2: Cordis Patch (`cordis.patch.yml`)
+
+Add to `~/.dsh/profiles/web/cordis.patch.yml`:
+
+```yaml
+- insert:
+    - id: gemini-compat
+      name: dsh-gemini-compat
+      config:
+        apiKeyEnv: GEMINI_API_KEY
+        baseURL: https://generativelanguage.googleapis.com/v1beta/openai
+        wireProfile: google-openai
+        defaultModel: gemini-2.0-flash
+        streamIdleTimeoutMs: 300000
+```
+
+## Configuration
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `apiKeyEnv` | `string` | `"GEMINI_API_KEY"` | Environment variable for API key |
+| `baseURL` | `string` | Google endpoint | Base URL for OpenAI-compatible endpoint |
+| `wireProfile` | `"google-openai" \| "generic-openai"` | `"google-openai"` | Replay/wire adaptation profile |
+| `defaultModel` | `string` | `"gemini-2.0-flash"` | Fallback model name |
+| `streamIdleTimeoutMs` | `number` | `300000` | Transport idle timeout in ms |
+| `enableDiagnostics` | `boolean` | `false` | Enable diagnostic trace collection |
+
+## Development
+
+```bash
+npm run build   # Type-check and compile to lib/
+npm run check   # Type-check only
+npm run test    # Run test suite
+```
 
 ## License
 
