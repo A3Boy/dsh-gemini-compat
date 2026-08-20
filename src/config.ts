@@ -1,15 +1,11 @@
-import type { CodecStrategy } from './replay/codec.js'
+export type WireProfile = 'google-openai' | 'generic-openai'
 
 export interface GeminiCompatConfig {
-  /** Credential reference (environment-variable name) resolved per request; defaults to `GEMINI_API_KEY`. */
   apiKeyEnv?: string
-  /** Endpoint base URL; `/chat/completions` is appended. */
   baseURL?: string
-  /** Default model id when `GenerateOptions.model` is not set by the caller. */
   defaultModel?: string
-  /** Replay metadata extraction/injection strategy. */
-  codecStrategy?: CodecStrategy
-  /** Enable diagnostic tracing. */
+  wireProfile?: WireProfile
+  streamIdleTimeoutMs?: number
   enableDiagnostics?: boolean
 }
 
@@ -17,6 +13,7 @@ export interface ResolvedGeminiCompatConfig {
   readonly apiKeyEnv: string
   readonly baseURL: string
   readonly defaultModel: string
-  readonly codecStrategy: CodecStrategy
+  readonly wireProfile: WireProfile
+  readonly streamIdleTimeoutMs: number
   readonly enableDiagnostics: boolean
 }

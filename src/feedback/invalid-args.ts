@@ -1,37 +1,59 @@
-import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 
-/**
- * Format the INVALID_ARGS feedback text that tells the model the tool call was
- * rejected before execution and should retry with complete arguments.
- *
- * Never uses tool-specific branching — strictly relies on the structured
- * `error.info.code === 'INVALID_ARGS'` signal.
- */
+export function isInvalidArgsResult(result: Readonly<ToolExecutionResult>): boolean {
+  return (
+    result.isError === true &&
+    result.error !== undefined &&
+    result.error.info?.code === 'INVALID_ARGS'
+  )
+}
+
 export function formatInvalidArgsFeedback(
-  toolName: string,
-  args: unknown,
-  result: Readonly<ToolExecutionResult>,
+  result: Readonly<ToolExecutionResult>
 ): string {
-  const argsFormatted =
-    typeof args === 'string'
-      ? args
-      : JSON.stringify(args, null, 2)
+  const parts: string[] = ['The tool execution failed because the provided arguments were invalid.']
 
-  const violationMessage =
-    result.isError
-      ? result.error.message
-      : 'Arguments did not adhere to required JSON schema'
+  if (result.error?.message) {
+    parts.push('Error: ' + result.error.message)
+  }
 
-  return [
-    'Tool call rejected before execution.',
-    `Tool: ${toolName}`,
-    '',
-    'Provided arguments:',
-    argsFormatted,
-    '',
-    'Validation error:',
-    violationMessage,
-    '',
-    "The tool did not execute. Re-check this tool's provided schema and retry with a complete argument object. Do not invent parameter names.",
-  ].join('\n')
+  parts.push(
+    'Please review the tool schema, ensure all required properties are provided with valid types, and try again.'
+  )
+
+  return parts.join('\n\n')
+}
+
+export async function handleInvalidArgsPostExecute(
+  result: Readonly<ToolExecutionResult>,
+  next: () => Promise<PostToolDecision>
+): Promise<PostToolDecision> {
+  const decision = await next()
+
+  if (!isInvalidArgsResult(result)) {
+    return decision
+  }
+
+  // If the downstream decision is already a block or non-accept, honor it
+  if (decision.kind !== 'accept') {
+    return decision
+  }
+
+  // If the downstream decision has custom value assignment, do not overwrite
+  if ('value' in decision && (decision as { value?: unknown }).value !== undefined) {
+    return decision
+  }
+
+  const feedbackText = formatInvalidArgsFeedback(result)
+
+  return {
+    kind: 'accept',
+    content: [
+      {
+        type: 'text',
+        text: feedbackText,
+      },
+    ],
+    ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}),
+  }
 }

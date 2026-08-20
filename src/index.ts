@@ -5,16 +5,16 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 
 import { GeminiCompatAdapter } from './adapter/adapter.js'
-import type { GeminiCompatConfig, ResolvedGeminiCompatConfig } from './config.js'
+import type { GeminiCompatConfig, WireProfile } from './config.js'
 import { projectToolSchema } from './schema/project.js'
 import { RouteSpecificReplayCodec } from './replay/codec.js'
-import { formatInvalidArgsFeedback } from './feedback/invalid-args.js'
+import { formatInvalidArgsFeedback, isInvalidArgsResult } from './feedback/invalid-args.js'
 
 export { GeminiCompatAdapter } from './adapter/adapter.js'
-export type { GeminiCompatConfig, ResolvedGeminiCompatConfig } from './config.js'
+export type { GeminiCompatConfig, WireProfile } from './config.js'
 export { projectToolSchema } from './schema/project.js'
 export { RouteSpecificReplayCodec } from './replay/codec.js'
-export { formatInvalidArgsFeedback } from './feedback/invalid-args.js'
+export { formatInvalidArgsFeedback, isInvalidArgsResult } from './feedback/invalid-args.js'
 export { DiagnosticsCollector } from './diagnostics/trace.js'
 
 export const name = 'dsh-gemini-compat'
@@ -23,32 +23,33 @@ export const inject = ['llm', 'tools'] as const
 const PROVIDER = 'gemini-router'
 const DEFAULT_API_KEY_ENV = 'GEMINI_API_KEY'
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai'
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 export type Config = GeminiCompatConfig
 
-export const PluginConfig = z.object({
+export const Config: z<Config> = z.object({
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
   baseURL: z.string().default(DEFAULT_BASE_URL),
   defaultModel: z.string().default('gemini-2.0-flash'),
-  codecStrategy: z
-    .union(['google-standard', 'extra-content', 'openrouter-reasoning', 'passthrough'])
-    .default('google-standard'),
+  wireProfile: z.union(['google-openai', 'generic-openai']).default('google-openai'),
+  streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   enableDiagnostics: z.boolean().default(false),
 })
 
-function resolveConfig(input: GeminiCompatConfig): ResolvedGeminiCompatConfig {
+function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> {
   return {
     apiKeyEnv: input.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
     baseURL: input.baseURL ?? DEFAULT_BASE_URL,
     defaultModel: input.defaultModel ?? 'gemini-2.0-flash',
-    codecStrategy: input.codecStrategy ?? 'google-standard',
+    wireProfile: (input.wireProfile ?? 'google-openai') as WireProfile,
+    streamIdleTimeoutMs: input.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     enableDiagnostics: input.enableDiagnostics ?? false,
   }
 }
 
 export function apply(ctx: Context, config: GeminiCompatConfig): void {
   const resolved = resolveConfig(config)
-  const replayCodec = new RouteSpecificReplayCodec(resolved.codecStrategy)
+  const replayCodec = new RouteSpecificReplayCodec(resolved.wireProfile)
 
   const resolveApiKey = async (): Promise<string> => {
     const ref = credentialRef(resolved.apiKeyEnv)
@@ -68,30 +69,33 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
   const adapter = new GeminiCompatAdapter({
     baseURL: resolved.baseURL,
     defaultModel: resolved.defaultModel,
+    wireProfile: resolved.wireProfile,
+    streamIdleTimeoutMs: resolved.streamIdleTimeoutMs,
     resolveApiKey,
     replayCodec,
   })
 
   ctx.effect(() => {
-    const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
-    return registration
+    return ctx.llm.registerAdapter([PROVIDER], adapter)
   })
 
   ctx.effect(() => {
     return ctx.on('tools/post-execute', async (exec, result, next) => {
       const decision = await next()
-      if (result.isError && result.error?.info?.code === 'INVALID_ARGS') {
-        return {
-          kind: 'block' as const,
-          feedback: [
-            {
-              type: 'text' as const,
-              text: formatInvalidArgsFeedback(exec.name, exec.arguments, result),
-            },
-          ],
-        }
+
+      if (!isInvalidArgsResult(result)) return decision
+
+      // Preserve downstream decisions
+      if (decision.kind !== 'accept') return decision
+      if ('value' in decision && decision.value !== undefined) return decision
+
+      const feedbackText = formatInvalidArgsFeedback(result)
+
+      return {
+        kind: 'accept',
+        content: [{ type: 'text', text: feedbackText }],
+        ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}),
       }
-      return decision
     })
   })
 }

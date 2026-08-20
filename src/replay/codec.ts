@@ -1,99 +1,84 @@
 import type { ReplayEnvelope } from '@deepseek-ai/dsh-llm'
 
-export type CodecStrategy = 'google-standard' | 'extra-content' | 'openrouter-reasoning' | 'passthrough'
+export type WireProfile = 'google-openai' | 'generic-openai'
+
+export interface GeminiReplayResponse {
+  kind: 'dsh-gemini-compat'
+  version: 1
+  wire: WireProfile
+  responseId?: string
+}
+
+export type GeminiReplayBlock =
+  | { type: 'text' }
+  | { type: 'reasoning' }
+  | { type: 'tool-call'; thoughtSignature?: string }
 
 /**
- * Route-specific replay codec that extracts and injects provider metadata
- * (thought signatures, reasoning details) using exactly one strategy per route.
- * Never sprays multiple fields onto the same request.
- *
- * The envelope follows the official DSH {@link ReplayEnvelope} shape:
- * `response` holds response-level metadata; `blocks` holds per-block metadata
- * in first-seen stream order.
+ * Validates untrusted ReplayEnvelope data from durable history.
+ * Returns true only if the envelope conforms to the Gemini compat contract.
+ */
+export function validateReplayEnvelope(raw: unknown): raw is ReplayEnvelope {
+  if (typeof raw !== 'object' || raw === null) return false
+  const env = raw as Record<string, unknown>
+  if (typeof env.response !== 'object' || env.response === null) return false
+  const resp = env.response as Record<string, unknown>
+  if (resp.kind !== 'dsh-gemini-compat') return false
+  if (resp.version !== 1) return false
+  if (resp.wire !== 'google-openai' && resp.wire !== 'generic-openai') return false
+  if (env.blocks !== undefined) {
+    if (!Array.isArray(env.blocks)) return false
+    for (const b of env.blocks) {
+      if (typeof b !== 'object' || b === null) return false
+      const block = b as Record<string, unknown>
+      if (typeof block.type !== 'string') return false
+      if (block.type !== 'text' && block.type !== 'reasoning' && block.type !== 'tool-call') return false
+    }
+  }
+  return true
+}
+
+/**
+ * Stateless replay codec for Gemini-compatible endpoints.
+ * Operates purely on explicit inputs without carrying mutable session state.
  */
 export class RouteSpecificReplayCodec {
-  private pendingReplayState: ReplayEnvelope | undefined
-
-  constructor(
-    readonly strategy: CodecStrategy = 'google-standard',
-  ) {}
+  constructor(public readonly wireProfile: WireProfile = 'google-openai') {}
 
   /**
-   * Store the replay envelope produced by the stream translator so the
-   * serializer can inject it into the next request's messages.
+   * Accept untrusted replay state from durable history.
+   * Returns a normalized ReplayEnvelope when valid, or undefined when the
+   * state is foreign, stale, or malformed. Never throws.
    */
-  setPendingReplayState(envelope: ReplayEnvelope): void {
-    this.pendingReplayState = envelope
-  }
-
-  /**
-   * Return the pending replay state and clear it (one-shot consumption).
-   */
-  getPendingReplayState(): ReplayEnvelope | undefined {
-    return this.pendingReplayState
-  }
-
-  /**
-   * Extract per-block metadata from the replay envelope for a given block index.
-   */
-  getBlockMetadata(envelope: ReplayEnvelope | undefined, blockIndex: number): unknown {
-    if (envelope?.blocks === undefined) return undefined
-    return envelope.blocks[blockIndex]
-  }
-
-  /**
-   * Inject replay metadata into wire messages for the next request.
-   * Only applies the configured single strategy — never sprays multiple fields.
-   */
-  injectMetadata(
-    messages: readonly Record<string, unknown>[],
-    envelope: ReplayEnvelope | undefined,
-  ): Record<string, unknown>[] {
-    if (envelope === undefined) return [...messages]
-
-    const response = envelope.response as Record<string, unknown> | undefined
-    if (response === undefined) return [...messages]
-
-    const thoughtSignatures = response['thoughtSignatures'] as Record<string, string> | undefined
-    const hasSignatures = thoughtSignatures !== undefined && Object.keys(thoughtSignatures).length > 0
-
-    if (this.strategy === 'google-standard' && hasSignatures) {
-      return messages.map((msg) => {
-        if (msg['role'] !== 'assistant' || !Array.isArray(msg['tool_calls'])) return msg
-        const cloned = { ...msg }
-        cloned['tool_calls'] = (msg['tool_calls'] as Record<string, unknown>[]).map((tc) => {
-          const id = tc['id'] as string | undefined
-          if (id === undefined) return tc
-          const sig = thoughtSignatures![id]
-          if (sig === undefined) return tc
-          return { ...tc, thought_signature: sig }
-        })
-        return cloned
-      })
+  validateAndNormalize(raw: unknown): ReplayEnvelope | undefined {
+    try {
+      if (validateReplayEnvelope(raw)) {
+        return raw as ReplayEnvelope
+      }
+    } catch {
+      // swallow — invalid replay state degrades gracefully
     }
+    return undefined
+  }
 
-    if (this.strategy === 'extra-content' && hasSignatures) {
-      return messages.map((msg) => {
-        if (msg['role'] !== 'assistant' || !Array.isArray(msg['tool_calls'])) return msg
-        const cloned = { ...msg }
-        cloned['tool_calls'] = (msg['tool_calls'] as Record<string, unknown>[]).map((tc) => {
-          const id = tc['id'] as string | undefined
-          if (id === undefined) return tc
-          const sig = thoughtSignatures![id]
-          if (sig === undefined) return tc
-          return {
-            ...tc,
-            extra_content: {
-              ...((tc['extra_content'] as Record<string, unknown> | undefined) ?? {}),
-              google: { thought_signature: sig },
-            },
-          }
-        })
-        return cloned
-      })
+  /**
+   * Extract thought signatures from validated block-aligned replay metadata.
+   * Returns a sparse map of tool-call block index to thought signature.
+   */
+  extractBlockSignatures(envelope: ReplayEnvelope): Map<number, string> {
+    const signatures = new Map<number, string>()
+    if (!validateReplayEnvelope(envelope) || !envelope.blocks) return signatures
+
+    let toolCallIndex = 0
+    for (const rawBlock of envelope.blocks) {
+      const b = rawBlock as GeminiReplayBlock
+      if (b.type === 'tool-call') {
+        if (b.thoughtSignature) {
+          signatures.set(toolCallIndex, b.thoughtSignature)
+        }
+        toolCallIndex++
+      }
     }
-
-    // openrouter-reasoning and passthrough: no thought_signature injection
-    return [...messages]
+    return signatures
   }
 }

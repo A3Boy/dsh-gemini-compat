@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { translate } from '../src/adapter/translate.js'
 import { RouteSpecificReplayCodec } from '../src/replay/codec.js'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -20,7 +20,7 @@ async function collect(
   signal?: AbortSignal,
 ): Promise<StreamChunk[]> {
   const chunks: StreamChunk[] = []
-  for await (const chunk of translate(stream, signal, codec)) {
+  for await (const chunk of translate(stream, codec, signal)) {
     chunks.push(chunk)
   }
   return chunks
@@ -30,7 +30,7 @@ const DONE_MARKER = '[' + 'DONE' + ']'
 
 describe('Stream Translator - Official StreamChunk Protocol', () => {
   it('should emit block lifecycle for tool-call across many deltas', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{
@@ -85,7 +85,7 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should maintain DSH block index independent from provider tool_calls index', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{
@@ -123,7 +123,7 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should defer finish until DONE and emit usage before finish', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{
@@ -149,14 +149,14 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should throw on malformed SSE JSON', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     await expect(
       collect(makeStream(['not valid json{{{', DONE_MARKER]), codec),
     ).rejects.toThrow(/malformed SSE/)
   })
 
   it('should throw STREAM_CLOSED when DONE is never received', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     await expect(
       collect(makeStream([
         JSON.stringify({ choices: [{ delta: { content: 'Hello' } }] }),
@@ -165,7 +165,7 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should throw on truncated tool-call JSON arguments', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     await expect(
       collect(makeStream([
         JSON.stringify({
@@ -186,7 +186,7 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should emit empty-response error for stop with no blocks', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{ finish_reason: 'stop' }],
@@ -205,7 +205,7 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
   })
 
   it('should capture thought_signature in replay envelope', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{
@@ -226,14 +226,18 @@ describe('Stream Translator - Official StreamChunk Protocol', () => {
     expect(finish).toBeDefined()
     if (finish!.type === 'finish') {
       expect(finish!.replayState).toBeDefined()
-      const response = finish!.replayState!.response as Record<string, unknown>
-      const sigs = response['thoughtSignatures'] as Record<string, string>
-      expect(sigs['call_1']).toBe('sig_abc')
+      expect(finish!.replayState!.blocks).toBeDefined()
+      const blocks = finish!.replayState!.blocks as Record<string, unknown>[]
+      const toolBlock = blocks.find((b) => b.type === 'tool-call')
+      expect(toolBlock).toBeDefined()
+      if (toolBlock) {
+        expect(toolBlock['thoughtSignature']).toBe('sig_abc')
+      }
     }
   })
 
   it('should emit nothing after finish', async () => {
-    const codec = new RouteSpecificReplayCodec('google-standard')
+    const codec = new RouteSpecificReplayCodec('google-openai')
     const chunks = await collect(makeStream([
       JSON.stringify({
         choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }],
