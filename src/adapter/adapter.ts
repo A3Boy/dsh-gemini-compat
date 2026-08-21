@@ -73,12 +73,18 @@ export class GeminiCompatAdapter extends LlmAdapter {
 
     let response: Response
     try {
-      // Debug: log the tool schemas we're actually sending
+      // Debug: write the tool schemas we're actually sending to a file
       if (body.tools !== undefined && body.tools.length > 0) {
-        for (const t of body.tools) {
-          const reqField = t.function as Record<string, unknown>
-          console.error(`[dsh-gemini-compat] tool=${t.function.name} strict=${reqField['strict']} required=${JSON.stringify((t.function.parameters as Record<string, unknown>)['required'])} desc_first_80=${t.function.description.slice(0, 80)}`)
-        }
+        try {
+          const { writeFileSync } = await import('node:fs')
+          const toolDump = body.tools.map((t) => ({
+            name: t.function.name,
+            strict: (t.function as Record<string, unknown>)['strict'],
+            required: (t.function.parameters as Record<string, unknown>)['required'],
+            description: t.function.description.slice(0, 300),
+          }))
+          writeFileSync('D:/web/dsh-plugins/dsh-gemini-compat/debug-tool-schema.json', JSON.stringify(toolDump, null, 2) + '\n', 'utf8')
+        } catch { /* ignore */ }
       }
       response = await fetch(endpoint, {
         method: 'POST',
