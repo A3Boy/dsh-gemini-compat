@@ -142,4 +142,105 @@ describe('Integration: Diagnostics with official ToolSchema', () => {
 
     expect(isContextOverflow(detail)).toBe(true)
   })
+
+  describe('isContextOverflow classification', () => {
+    it('matches Google input token count overflow format', async () => {
+      const { isContextOverflow } = await import('../src/adapter/adapter.js')
+      const googleError =
+        'The input token count (1213507) exceeds the maximum number of tokens allowed 1048576.'
+      expect(isContextOverflow(googleError)).toBe(true)
+    })
+
+    it('matches generic token count exceeds format', async () => {
+      const { isContextOverflow } = await import('../src/adapter/adapter.js')
+      const altGoogleError = 'Request payload token count exceeds 1048576 tokens limit'
+      expect(isContextOverflow(altGoogleError)).toBe(true)
+    })
+
+    it('matches OpenAI context window format via DSH fallback', async () => {
+      const { isContextOverflow } = await import('../src/adapter/adapter.js')
+      const openaiError =
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."
+      expect(isContextOverflow(openaiError)).toBe(true)
+    })
+
+    it('rejects non-context-overflow 400 errors containing "exceeds"', async () => {
+      const { isContextOverflow } = await import('../src/adapter/adapter.js')
+      // Quota / Rate limit errors
+      expect(isContextOverflow('Quota exceeded for quota metric "Queries" and limit "Queries per minute"')).toBe(false)
+      expect(isContextOverflow('Resource has been exhausted (e.g. check quota-exceeded)')).toBe(false)
+      expect(isContextOverflow('User rate limit exceeded.')).toBe(false)
+
+      // Output token / max completion limit (not context window overflow)
+      expect(isContextOverflow('Generation stopped because max_output_tokens exceeded')).toBe(false)
+      expect(isContextOverflow('Response length exceeds maximum allowed completion tokens 8192')).toBe(false)
+
+      // General payload / field size errors
+      expect(isContextOverflow('Request body size exceeds 10MB limit')).toBe(false)
+      expect(isContextOverflow('Number of function declarations exceeds maximum allowed 128')).toBe(false)
+      expect(isContextOverflow('Function call argument nesting depth exceeds 10')).toBe(false)
+
+      // Unrelated 400 bad requests
+      expect(isContextOverflow('Invalid function call schema')).toBe(false)
+      expect(isContextOverflow('API key not valid. Please pass a valid API key.')).toBe(false)
+    })
+  })
+
+  describe('resolveModel capacity override', () => {
+    it('uses default capacity when no model-specific override provided', async () => {
+      const { GeminiCompatAdapter } = await import('../src/adapter/adapter.js')
+      const adapter = new GeminiCompatAdapter({
+        baseURL: 'https://example.com/v1',
+        defaultModel: 'gemini-2.5-flash',
+        wireProfile: 'google-openai',
+        toolSchemaReinforcement: 'off',
+        streamIdleTimeoutMs: 10000,
+        contextWindow: 1_048_576,
+        defaultMaxTokens: 65_536,
+        resolveApiKey: async () => 'test-key',
+        replayCodec: {} as any,
+      })
+
+      const modelInfo = await adapter.resolveModel('google', 'gemini-2.5-flash')
+      expect(modelInfo.context?.contextWindow).toBe(1_048_576)
+      expect(modelInfo.defaultMaxTokens).toBe(65_536)
+    })
+
+    it('applies model-specific override when defined', async () => {
+      const { GeminiCompatAdapter } = await import('../src/adapter/adapter.js')
+      const adapter = new GeminiCompatAdapter({
+        baseURL: 'https://example.com/v1',
+        defaultModel: 'gemini-2.5-flash',
+        wireProfile: 'google-openai',
+        toolSchemaReinforcement: 'off',
+        streamIdleTimeoutMs: 10000,
+        contextWindow: 1_048_576,
+        defaultMaxTokens: 65_536,
+        models: {
+          'gemini-2.5-pro': {
+            contextWindow: 2_097_152,
+            defaultMaxTokens: 65_536,
+          },
+          'gemini-1.5-flash-8b': {
+            contextWindow: 1_000_000,
+            defaultMaxTokens: 8_192,
+          },
+        },
+        resolveApiKey: async () => 'test-key',
+        replayCodec: {} as any,
+      })
+
+      const proModel = await adapter.resolveModel('google', 'gemini-2.5-pro')
+      expect(proModel.context?.contextWindow).toBe(2_097_152)
+      expect(proModel.defaultMaxTokens).toBe(65_536)
+
+      const smallModel = await adapter.resolveModel('google', 'gemini-1.5-flash-8b')
+      expect(smallModel.context?.contextWindow).toBe(1_000_000)
+      expect(smallModel.defaultMaxTokens).toBe(8_192)
+
+      const defaultModel = await adapter.resolveModel('google', 'gemini-2.5-flash')
+      expect(defaultModel.context?.contextWindow).toBe(1_048_576)
+      expect(defaultModel.defaultMaxTokens).toBe(65_536)
+    })
+  })
 })

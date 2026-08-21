@@ -55,6 +55,10 @@ Add to `~/.dsh/profiles/web/cordis.patch.yml`:
 | `apiKeyEnv` | `string` | `"GEMINI_API_KEY"` | Environment variable for API key |
 | `baseURL` | `string` | Google endpoint | Base URL for OpenAI-compatible endpoint |
 | `wireProfile` | `"google-openai" \| "generic-openai"` | `"google-openai"` | Replay/wire adaptation profile |
+| `toolSchemaReinforcement` | `"off" \| "auto" \| "required-only"` | `"auto"` | Tool schema reinforcement prompt mode |
+| `contextWindow` | `number` | `1048576` | Default context window capacity for models |
+| `defaultMaxTokens` | `number` | `65536` | Default maximum output tokens |
+| `models` | `Record<string, { contextWindow?, defaultMaxTokens? }>` | `{}` | Optional per-model capacity overrides |
 | `defaultModel` | `string` | `"gemini-2.0-flash"` | Fallback model name |
 | `streamIdleTimeoutMs` | `number` | `300000` | Transport idle timeout in ms |
 | `enableDiagnostics` | `boolean` | `false` | Enable diagnostic trace collection |

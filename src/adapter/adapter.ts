@@ -17,8 +17,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { serializeRequest } from './serialize.js'
 import { translate } from './translate.js'
 import type { RouteSpecificReplayCodec, WireProfile } from '../replay/codec.js'
-import type { ToolSchemaReinforcement } from '../config.js'
-import { resolveReinforcement } from '../config.js'
+import type { ToolSchemaReinforcement, ModelCapacity } from '../config.js'
+import { resolveReinforcement, resolveModelCapacity } from '../config.js'
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const STREAM_IDLE_TIMEOUT_CODE = 'GEMINI_COMPAT_STREAM_IDLE_TIMEOUT'
@@ -43,6 +43,7 @@ export interface GeminiCompatAdapterOptions {
   readonly streamIdleTimeoutMs: number
   readonly contextWindow: number
   readonly defaultMaxTokens: number
+  readonly models?: Record<string, ModelCapacity>
   readonly resolveApiKey: () => Promise<string>
   readonly replayCodec: RouteSpecificReplayCodec
 }
@@ -61,13 +62,20 @@ export class GeminiCompatAdapter extends LlmAdapter {
   }
 
   resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    const { contextWindow, defaultMaxTokens } = resolveModelCapacity(
+      model,
+      this.opts.models,
+      this.opts.contextWindow,
+      this.opts.defaultMaxTokens,
+    )
+
     return Promise.resolve({
       provider,
       id: model,
       name: model,
       inputModalities: ['text'],
-      context: { contextWindow: this.opts.contextWindow },
-      defaultMaxTokens: this.opts.defaultMaxTokens,
+      context: { contextWindow },
+      defaultMaxTokens,
     })
   }
 

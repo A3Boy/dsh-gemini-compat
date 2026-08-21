@@ -8,7 +8,11 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 
 import { GeminiCompatAdapter } from './adapter/adapter.js'
-import type { GeminiCompatConfig, WireProfile } from './config.js'
+import type {
+  GeminiCompatConfig,
+  ResolvedGeminiCompatConfig,
+  WireProfile,
+} from './config.js'
 import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS } from './config.js'
 import { projectToolSchema } from './schema/project.js'
 import { RouteSpecificReplayCodec } from './replay/codec.js'
@@ -56,10 +60,18 @@ export const Config: z<Config> = z.object({
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   contextWindow: z.number().min(1).default(DEFAULT_CONTEXT_WINDOW),
   defaultMaxTokens: z.number().min(1).default(DEFAULT_MAX_TOKENS),
+  models: z
+    .dict(
+      z.object({
+        contextWindow: z.number().min(1),
+        defaultMaxTokens: z.number().min(1),
+      }),
+    )
+    .description('Model-specific capacity overrides keyed by model name'),
   enableDiagnostics: z.boolean().default(false),
 })
 
-function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> {
+function resolveConfig(input: GeminiCompatConfig): ResolvedGeminiCompatConfig {
   return {
     apiKeyEnv: input.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
     baseURL: input.baseURL ?? DEFAULT_BASE_URL,
@@ -69,6 +81,7 @@ function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> 
     streamIdleTimeoutMs: input.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     defaultMaxTokens: input.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(input.models ? { models: input.models } : {}),
     enableDiagnostics: input.enableDiagnostics ?? false,
   }
 }
@@ -107,6 +120,7 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
     streamIdleTimeoutMs: resolved.streamIdleTimeoutMs,
     contextWindow: resolved.contextWindow,
     defaultMaxTokens: resolved.defaultMaxTokens,
+    ...(resolved.models ? { models: resolved.models } : {}),
     resolveApiKey,
     replayCodec,
   })
