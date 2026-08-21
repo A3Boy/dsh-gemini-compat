@@ -110,32 +110,51 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
 
   // INVALID_ARGS recovery: concise tool result + one-shot corrective notice
   // riding additionalContexts (next model request sees it right before
-  // generating), with per-agent escalation on repeated identical failures.
+  // generating), with per-agent consecutive-chain escalation.
   ctx.effect(() => {
     return ctx.on(
       'tools/post-execute',
       async (exec: ToolExecution, result, next): Promise<PostToolDecision> => {
         const decision = await next()
 
+        // Any non-INVALID_ARGS tool result (including success) resets the
+        // whole recovery chain for this agent.
         if (!isInvalidArgsResult(result)) {
-          // A successful call resets the recovery chain for this failure key.
-          escalation.resetKey(exec, result)
+          if (exec.agent) escalation.reset(exec.agent)
           return decision
         }
 
-        // Preserve downstream decisions: never override a non-accept decision
-        if (decision.kind !== 'accept') return decision
-        if ('value' in decision && decision.value !== undefined) return decision
-
         const count = escalation.advance(exec, result)
         const reminder = buildInvalidArgsRetryNotice(exec, result, count)
+        const additionalContexts = [
+          reminder,
+          ...(decision.additionalContexts ?? []),
+        ]
 
-        // Keep the tool result concise; the corrective detail lives in the
-        // notice that the inbox delivers immediately before the next call.
+        // Preserve a downstream block decision, but still attach the notice.
+        if (decision.kind === 'block') {
+          return {
+            kind: 'block',
+            feedback: decision.feedback,
+            additionalContexts,
+          }
+        }
+
+        // Accept: if a downstream listener already replaced content,
+        // respect it and only prepend the context.
+        if (decision.content !== undefined) {
+          return {
+            kind: 'accept' as const,
+            content: decision.content,
+            additionalContexts,
+          }
+        }
+
+        // Otherwise use the concise INVALID_ARGS result content.
         return {
-          kind: 'accept',
-          content: [{ type: 'text', text: formatConciseResult(exec.name, result) }],
-          additionalContexts: [reminder, ...(decision.additionalContexts ?? [])],
+          kind: 'accept' as const,
+          content: [{ type: 'text' as const, text: formatConciseResult(exec.name, result) }],
+          additionalContexts,
         }
       },
     )
