@@ -3,3 +3,5 @@ lib
 dist
 .DS_Store
 *.log
+.gemini-tool-ab-test/
+.gemini-tool-test/

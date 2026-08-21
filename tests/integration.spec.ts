@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { DiagnosticsCollector } from '../src/diagnostics/trace.js'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 
@@ -217,30 +217,102 @@ describe('Integration: Diagnostics with official ToolSchema', () => {
         contextWindow: 1_048_576,
         defaultMaxTokens: 65_536,
         models: {
-          'gemini-2.5-pro': {
+          'custom-gemini-router-model': {
             contextWindow: 2_097_152,
             defaultMaxTokens: 65_536,
           },
-          'gemini-1.5-flash-8b': {
-            contextWindow: 1_000_000,
-            defaultMaxTokens: 8_192,
+          'gemini-2.5-pro': {
+            contextWindow: 900_000,
           },
         },
         resolveApiKey: async () => 'test-key',
         replayCodec: {} as any,
       })
 
-      const proModel = await adapter.resolveModel('google', 'gemini-2.5-pro')
-      expect(proModel.context?.contextWindow).toBe(2_097_152)
-      expect(proModel.defaultMaxTokens).toBe(65_536)
+      const customModel = await adapter.resolveModel('google', 'custom-gemini-router-model')
+      expect(customModel.context?.contextWindow).toBe(2_097_152)
+      expect(customModel.defaultMaxTokens).toBe(65_536)
 
-      const smallModel = await adapter.resolveModel('google', 'gemini-1.5-flash-8b')
-      expect(smallModel.context?.contextWindow).toBe(1_000_000)
-      expect(smallModel.defaultMaxTokens).toBe(8_192)
+      const proModel = await adapter.resolveModel('google', 'gemini-2.5-pro')
+      expect(proModel.context?.contextWindow).toBe(900_000)
+      // defaultMaxTokens should inherit from built-in known capacity for gemini-2.5-pro (65,536)
+      expect(proModel.defaultMaxTokens).toBe(65_536)
 
       const defaultModel = await adapter.resolveModel('google', 'gemini-2.5-flash')
       expect(defaultModel.context?.contextWindow).toBe(1_048_576)
       expect(defaultModel.defaultMaxTokens).toBe(65_536)
+    })
+  })
+
+  describe('HTTP 400 context overflow adapter mapping', () => {
+    it('maps upstream HTTP 400 with Google token count overflow into CONTEXT_WINDOW_EXCEEDED LlmError', async () => {
+      const { GeminiCompatAdapter } = await import('../src/adapter/adapter.js')
+      const { CONTEXT_WINDOW_EXCEEDED_CODE } = await import('@deepseek-ai/dsh-llm')
+
+      const adapter = new GeminiCompatAdapter({
+        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        defaultModel: 'gemini-3.7-flash',
+        wireProfile: 'google-openai',
+        toolSchemaReinforcement: 'off',
+        streamIdleTimeoutMs: 10000,
+        contextWindow: 1_048_576,
+        defaultMaxTokens: 65_536,
+        resolveApiKey: async () => 'test-api-key',
+        replayCodec: {} as any,
+      })
+
+      const originalFetch = globalThis.fetch
+      try {
+        globalThis.fetch = vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: JSON.stringify({
+                  error: {
+                    code: 400,
+                    message:
+                      'The input token count (1213507) exceeds the maximum number of tokens allowed 1048576.',
+                    status: 'INVALID_ARGUMENT',
+                  },
+                }),
+                type: 'upstream_error',
+                code: 400,
+              },
+            }),
+            {
+              status: 400,
+              headers: {
+                'content-type': 'application/json',
+              },
+            },
+          ),
+        )
+
+        const options = {
+          model: 'gemini-3.7-flash',
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'user' as const,
+              content: [{ type: 'text' as const, text: 'hello' }],
+            },
+          ],
+        }
+
+        async function consume(iterable: AsyncIterable<any>) {
+          const items = []
+          for await (const item of iterable) {
+            items.push(item)
+          }
+          return items
+        }
+
+        await expect(consume(adapter.stream(options as any))).rejects.toMatchObject({
+          code: CONTEXT_WINDOW_EXCEEDED_CODE,
+        })
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
   })
 })

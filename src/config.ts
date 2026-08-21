@@ -2,6 +2,8 @@ export type WireProfile = 'google-openai' | 'generic-openai'
 
 export type ToolSchemaReinforcement = 'off' | 'auto' | 'required-only'
 
+export const DEFAULT_MODEL = 'gemini-3.7-flash'
+
 /** Default Gemini 3.7 Flash context window: 1M tokens. */
 export const DEFAULT_CONTEXT_WINDOW = 1_048_576
 
@@ -13,7 +15,7 @@ export interface ModelCapacity {
   defaultMaxTokens?: number
 }
 
-/** Built-in capacity profiles for well-known Gemini models. */
+/** Built-in capacity profiles for well-known exact Gemini model IDs. */
 export const KNOWN_MODEL_CAPACITIES: Record<string, Required<ModelCapacity>> = {
   // Gemini 1.5 Pro: 2M context window, 8K max output
   'gemini-1.5-pro': { contextWindow: 2_097_152, defaultMaxTokens: 8_192 },
@@ -21,27 +23,26 @@ export const KNOWN_MODEL_CAPACITIES: Record<string, Required<ModelCapacity>> = {
   // Gemini 1.5 Flash: 1M context window, 8K max output
   'gemini-1.5-flash': { contextWindow: 1_048_576, defaultMaxTokens: 8_192 },
   'gemini-1.5-flash-latest': { contextWindow: 1_048_576, defaultMaxTokens: 8_192 },
+  'gemini-1.5-flash-8b': { contextWindow: 1_048_576, defaultMaxTokens: 8_192 },
   // Gemini 2.0 Flash: 1M context window, 8K max output
   'gemini-2.0-flash': { contextWindow: 1_048_576, defaultMaxTokens: 8_192 },
   'gemini-2.0-flash-exp': { contextWindow: 1_048_576, defaultMaxTokens: 8_192 },
   // Gemini 2.5 Pro / Flash: 1M context window, 64K max output
   'gemini-2.5-pro': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-2.5-pro-preview-03-25': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
   'gemini-2.5-flash': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-2.5-flash-preview-05-20': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
   // Gemini 3.7 Flash: 1M context window, 64K max output
   'gemini-3.7-flash': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-3.7-flash-latest': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
   'gemini-3.7-flash-thinking': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-3.7-flash-high': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-3.7-flash-medium': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
+  'gemini-3.7-flash-low': { contextWindow: 1_048_576, defaultMaxTokens: 65_536 },
 }
 
 export function findKnownModelCapacity(model: string): ModelCapacity | undefined {
-  if (KNOWN_MODEL_CAPACITIES[model]) return KNOWN_MODEL_CAPACITIES[model]
-  const lower = model.toLowerCase()
-  if (lower.startsWith('gemini-1.5-pro')) return { contextWindow: 2_097_152, defaultMaxTokens: 8_192 }
-  if (lower.startsWith('gemini-1.5-flash')) return { contextWindow: 1_048_576, defaultMaxTokens: 8_192 }
-  if (lower.startsWith('gemini-2.0-flash')) return { contextWindow: 1_048_576, defaultMaxTokens: 8_192 }
-  if (lower.startsWith('gemini-2.5-') || lower.startsWith('gemini-3.7-')) {
-    return { contextWindow: 1_048_576, defaultMaxTokens: 65_536 }
-  }
-  return undefined
+  return KNOWN_MODEL_CAPACITIES[model] ?? KNOWN_MODEL_CAPACITIES[model.toLowerCase()]
 }
 
 export function resolveModelCapacity(

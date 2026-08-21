@@ -13,7 +13,7 @@ import type {
   ResolvedGeminiCompatConfig,
   WireProfile,
 } from './config.js'
-import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS } from './config.js'
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, DEFAULT_MODEL } from './config.js'
 import { projectToolSchema } from './schema/project.js'
 import { RouteSpecificReplayCodec } from './replay/codec.js'
 import {
@@ -54,7 +54,7 @@ export type Config = GeminiCompatConfig
 export const Config: z<Config> = z.object({
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
   baseURL: z.string().default(DEFAULT_BASE_URL),
-  defaultModel: z.string().default('gemini-2.0-flash'),
+  defaultModel: z.string().default(DEFAULT_MODEL),
   wireProfile: z.union(['google-openai', 'generic-openai']).default('google-openai'),
   toolSchemaReinforcement: z.union(['off', 'auto', 'required-only']).default('auto'),
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
@@ -75,7 +75,7 @@ function resolveConfig(input: GeminiCompatConfig): ResolvedGeminiCompatConfig {
   return {
     apiKeyEnv: input.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
     baseURL: input.baseURL ?? DEFAULT_BASE_URL,
-    defaultModel: input.defaultModel ?? 'gemini-2.0-flash',
+    defaultModel: input.defaultModel ?? DEFAULT_MODEL,
     wireProfile: (input.wireProfile ?? 'google-openai') as WireProfile,
     toolSchemaReinforcement: input.toolSchemaReinforcement ?? 'auto',
     streamIdleTimeoutMs: input.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
