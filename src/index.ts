@@ -1,20 +1,38 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
+import { LlmError } from '@deepseek-ai/dsh-llm'
+import type { PostToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { LlmError } from '@deepseek-ai/dsh-llm'
 
 import { GeminiCompatAdapter } from './adapter/adapter.js'
 import type { GeminiCompatConfig, WireProfile } from './config.js'
 import { projectToolSchema } from './schema/project.js'
 import { RouteSpecificReplayCodec } from './replay/codec.js'
-import { formatInvalidArgsFeedback, isInvalidArgsResult } from './feedback/invalid-args.js'
+import {
+  isInvalidArgsResult,
+  formatInvalidArgsFeedback,
+} from './feedback/invalid-args.js'
+import {
+  InvalidArgsEscalation,
+  buildInvalidArgsRetryNotice,
+  formatConciseResult,
+} from './feedback/recovery.js'
 
 export { GeminiCompatAdapter } from './adapter/adapter.js'
-export type { GeminiCompatConfig, WireProfile } from './config.js'
+export type { GeminiCompatConfig, WireProfile, ToolSchemaReinforcement } from './config.js'
 export { projectToolSchema } from './schema/project.js'
 export { RouteSpecificReplayCodec } from './replay/codec.js'
 export { formatInvalidArgsFeedback, isInvalidArgsResult } from './feedback/invalid-args.js'
+export {
+  InvalidArgsEscalation,
+  buildInvalidArgsRetryNotice,
+  formatConciseResult,
+  extractMissingFields,
+  recoveryKey,
+} from './feedback/recovery.js'
 export { buildToolSchemaReinforcement, requiredFields } from './prompt/tool-schema-reinforcement.js'
 export { DiagnosticsCollector } from './diagnostics/trace.js'
 
@@ -50,9 +68,16 @@ function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> 
   }
 }
 
+/**
+ * Build a deterministic message source for corrective notices is owned by the
+ * recovery module (`buildInvalidArgsRetryNotice`); this file only wires the
+ * post-execute and pre-step listeners.
+ */
+
 export function apply(ctx: Context, config: GeminiCompatConfig): void {
   const resolved = resolveConfig(config)
   const replayCodec = new RouteSpecificReplayCodec(resolved.wireProfile)
+  const escalation = new InvalidArgsEscalation()
 
   const resolveApiKey = async (): Promise<string> => {
     const ref = credentialRef(resolved.apiKeyEnv)
@@ -83,25 +108,50 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
     return ctx.llm.registerAdapter([PROVIDER], adapter)
   })
 
+  // INVALID_ARGS recovery: concise tool result + one-shot corrective notice
+  // riding additionalContexts (next model request sees it right before
+  // generating), with per-agent escalation on repeated identical failures.
   ctx.effect(() => {
-    return ctx.on('tools/post-execute', async (exec, result, next) => {
-      const decision = await next()
+    return ctx.on(
+      'tools/post-execute',
+      async (exec: ToolExecution, result, next): Promise<PostToolDecision> => {
+        const decision = await next()
 
-      if (!isInvalidArgsResult(result)) return decision
+        if (!isInvalidArgsResult(result)) {
+          // A successful call resets the recovery chain for this failure key.
+          escalation.resetKey(exec, result)
+          return decision
+        }
 
-      // Preserve downstream decisions
-      if (decision.kind !== 'accept') return decision
-      if ('value' in decision && decision.value !== undefined) return decision
+        // Preserve downstream decisions: never override a non-accept decision
+        if (decision.kind !== 'accept') return decision
+        if ('value' in decision && decision.value !== undefined) return decision
 
-      const feedbackText = formatInvalidArgsFeedback(exec.name, exec.arguments, result)
+        const count = escalation.advance(exec, result)
+        const reminder = buildInvalidArgsRetryNotice(exec, result, count)
 
-      // Use `block` so the Agent Loop treats this as a rejected call
-      // that needs retry, not a completed call with custom content.
-      return {
-        kind: 'block',
-        feedback: [{ type: 'text', text: feedbackText }],
-        ...(decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {}),
-      }
-    })
+        // Keep the tool result concise; the corrective detail lives in the
+        // notice that the inbox delivers immediately before the next call.
+        return {
+          kind: 'accept',
+          content: [{ type: 'text', text: formatConciseResult(exec.name, result) }],
+          additionalContexts: [reminder, ...(decision.additionalContexts ?? [])],
+        }
+      },
+    )
+  })
+
+  // A user interjection changes the context; repetition across it is not a
+  // loop (same reset rule as the first-party repeat-tool-reminder guard).
+  ctx.effect(() => {
+    return ctx.on(
+      'agent/pre-step',
+      ({ agent, messages }: { agent: Agent; messages: readonly UserMessage[] }, next): Promise<PreStepDecision> => {
+        if (messages.some((message) => message.source.kind === 'user')) {
+          escalation.reset(agent)
+        }
+        return next()
+      },
+    )
   })
 }
