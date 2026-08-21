@@ -17,6 +17,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { serializeRequest } from './serialize.js'
 import { translate } from './translate.js'
 import type { RouteSpecificReplayCodec, WireProfile } from '../replay/codec.js'
+import type { ToolSchemaReinforcement } from '../config.js'
+import { resolveReinforcement } from '../config.js'
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const STREAM_IDLE_TIMEOUT_CODE = 'GEMINI_COMPAT_STREAM_IDLE_TIMEOUT'
@@ -25,6 +27,7 @@ export interface GeminiCompatAdapterOptions {
   readonly baseURL: string
   readonly defaultModel: string
   readonly wireProfile: WireProfile
+  readonly toolSchemaReinforcement: ToolSchemaReinforcement
   readonly streamIdleTimeoutMs: number
   readonly resolveApiKey: () => Promise<string>
   readonly replayCodec: RouteSpecificReplayCodec
@@ -51,7 +54,7 @@ export class GeminiCompatAdapter extends LlmAdapter {
     const apiKey = await this.opts.resolveApiKey()
     const model = options.model || this.opts.defaultModel
 
-    const body = serializeRequest(options, model, this.opts.wireProfile, this.opts.replayCodec)
+    const body = serializeRequest(options, model, this.opts.wireProfile, this.opts.replayCodec, resolveReinforcement(this.opts.wireProfile, this.opts.toolSchemaReinforcement))
     const endpoint = `${this.opts.baseURL.replace(/\/+$/, '')}/chat/completions`
     const payload = JSON.stringify(body)
 
@@ -73,19 +76,6 @@ export class GeminiCompatAdapter extends LlmAdapter {
 
     let response: Response
     try {
-      // Debug: write the tool schemas we're actually sending to a file
-      if (body.tools !== undefined && body.tools.length > 0) {
-        try {
-          const { writeFileSync } = await import('node:fs')
-          const toolDump = body.tools.map((t) => ({
-            name: t.function.name,
-            strict: (t.function as Record<string, unknown>)['strict'],
-            required: (t.function.parameters as Record<string, unknown>)['required'],
-            description: t.function.description.slice(0, 300),
-          }))
-          writeFileSync('D:/web/dsh-plugins/dsh-gemini-compat/debug-tool-schema.json', JSON.stringify(toolDump, null, 2) + '\n', 'utf8')
-        } catch { /* ignore */ }
-      }
       response = await fetch(endpoint, {
         method: 'POST',
         headers,

@@ -3,6 +3,8 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { projectToolSchema } from '../schema/project.js'
 import type { RouteSpecificReplayCodec, WireProfile } from '../replay/codec.js'
+import type { ToolSchemaReinforcement } from '../config.js'
+import { buildToolSchemaReinforcement } from '../prompt/tool-schema-reinforcement.js'
 
 export interface WireTool {
   type: 'function'
@@ -145,69 +147,16 @@ function serializeMessages(
   return wire
 }
 
-function enhanceToolDescription(
-  name: string,
-  description: string,
-  parameters: Record<string, unknown>,
-): string {
-  const baseDesc = description || `Execute ${name} tool.`
-
-  const required = parameters['required']
-  if (!Array.isArray(required) || required.length === 0) {
-    return baseDesc
-  }
-
-  const requiredNames = required as string[]
-  const rules: string[] = []
-
-  // Put the most critical rule FIRST — Gemini thinking models read top-down
-  for (const req of requiredNames) {
-    rules.push(`- \`${req}\` is REQUIRED. You MUST provide it.`)
-  }
-
-  // Call out optional fields the model keeps confusing with the required command
-  const properties = parameters['properties']
-  if (typeof properties === 'object' && properties !== null) {
-    const propMap = properties as Record<string, unknown>
-    const optionalFields = Object.keys(propMap).filter(
-      (k) => !requiredNames.includes(k),
-    )
-    for (const opt of optionalFields) {
-      if (opt === 'description') {
-        rules.push(`- \`${opt}\` is NOT the command. It is only a short label. Never put the actual command text only in \`${opt}\`.`)
-      }
-    }
-  }
-
-  rules.push(`- Never call this tool without ALL required fields above.`)
-
-  // Rules go FIRST, then the original description
-  return [
-    `CRITICAL — ${name} parameter rules:`,
-    ...rules,
-    '',
-    baseDesc,
-  ].join('\n')
-}
-
 function serializeTools(tools: readonly ToolSchema[] | undefined): WireTool[] | undefined {
   if (tools === undefined || tools.length === 0) return undefined
   return tools.map((tool) => {
     const projected = projectToolSchema(tool, { target: 'openai-chat' })
-    const enhancedDescription = enhanceToolDescription(
-      projected.name,
-      projected.description,
-      projected.parameters,
-    )
     return {
       type: 'function' as const,
       function: {
         name: projected.name,
-        description: enhancedDescription,
+        description: projected.description,
         parameters: projected.parameters,
-        // Force the provider to generate arguments that strictly follow the
-        // JSON Schema `required` list. Without this, Gemini thinking models
-        // commonly omit required properties and the call fails INVALID_ARGS.
         strict: true,
       },
     }
@@ -219,6 +168,7 @@ export function serializeRequest(
   defaultModel: string,
   wireProfile: WireProfile,
   codec: RouteSpecificReplayCodec,
+  reinforcementMode: ToolSchemaReinforcement,
 ): WireRequest {
   // Batch D: reasoningEffort fail-loud when unsupported
   if (options.reasoningEffort !== undefined) {
@@ -229,8 +179,20 @@ export function serializeRequest(
   }
 
   const messages: Record<string, unknown>[] = []
+
+  // Build system content: merge original system prompt with reinforcement
+  const systemParts: string[] = []
   if (options.system !== undefined) {
-    messages.push({ role: 'system', content: options.system })
+    systemParts.push(options.system)
+  }
+  if (reinforcementMode === 'required-only') {
+    const reinforcement = buildToolSchemaReinforcement(options.tools)
+    if (reinforcement !== undefined) {
+      systemParts.push(reinforcement)
+    }
+  }
+  if (systemParts.length > 0) {
+    messages.push({ role: 'system', content: systemParts.join('\n\n') })
   }
   messages.push(...serializeMessages(options.messages, wireProfile, codec))
 

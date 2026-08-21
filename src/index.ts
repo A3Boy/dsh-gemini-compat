@@ -15,6 +15,7 @@ export type { GeminiCompatConfig, WireProfile } from './config.js'
 export { projectToolSchema } from './schema/project.js'
 export { RouteSpecificReplayCodec } from './replay/codec.js'
 export { formatInvalidArgsFeedback, isInvalidArgsResult } from './feedback/invalid-args.js'
+export { buildToolSchemaReinforcement, requiredFields } from './prompt/tool-schema-reinforcement.js'
 export { DiagnosticsCollector } from './diagnostics/trace.js'
 
 export const name = 'dsh-gemini-compat'
@@ -32,6 +33,7 @@ export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   defaultModel: z.string().default('gemini-2.0-flash'),
   wireProfile: z.union(['google-openai', 'generic-openai']).default('google-openai'),
+  toolSchemaReinforcement: z.union(['off', 'auto', 'required-only']).default('auto'),
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   enableDiagnostics: z.boolean().default(false),
 })
@@ -42,6 +44,7 @@ function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> 
     baseURL: input.baseURL ?? DEFAULT_BASE_URL,
     defaultModel: input.defaultModel ?? 'gemini-2.0-flash',
     wireProfile: (input.wireProfile ?? 'google-openai') as WireProfile,
+    toolSchemaReinforcement: input.toolSchemaReinforcement ?? 'auto',
     streamIdleTimeoutMs: input.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     enableDiagnostics: input.enableDiagnostics ?? false,
   }
@@ -70,6 +73,7 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
     baseURL: resolved.baseURL,
     defaultModel: resolved.defaultModel,
     wireProfile: resolved.wireProfile,
+    toolSchemaReinforcement: resolved.toolSchemaReinforcement,
     streamIdleTimeoutMs: resolved.streamIdleTimeoutMs,
     resolveApiKey,
     replayCodec,
