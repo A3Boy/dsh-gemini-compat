@@ -1,0 +1,5 @@
+{"id": "rl-e1-single-pwsh", "task": "使用 pwsh 查看当前目录并告诉我有哪些文件。", "min_tool_calls": 1, "expected_tools": ["pwsh"], "required_fields_ok": true}
+{"id": "rl-e2-env-inspect", "task": "检查当前开发环境、操作系统和项目根目录，然后告诉我当前项目运行需要哪些主要环境依赖。必须基于工具结果。", "min_tool_calls": 2, "expected_tools": ["pwsh"], "required_fields_ok": true}
+{"id": "rl-e3-package-json", "task": "使用 PowerShell 完成：1. 读取 package.json 2. 提取 dependencies/devDependencies 3. 按依赖类型分组 4. 输出统计结果。不要直接猜测。", "min_tool_calls": 2, "expected_tools": ["pwsh"], "required_fields_ok": true}
+{"id": "rl-e4-long-chain", "task": "深入分析当前项目：1. 查看根目录 2. 阅读根 package.json 3. 找主要 Agent 入口 4. 检查主要 runtime 5. 总结架构。不要提前总结，基于每一步工具结果继续。", "min_tool_calls": 8, "expected_tools": ["glob", "read", "grep", "pwsh"], "required_fields_ok": true}
+{"id": "rl-e5-background-jobs", "task": "使用可用工具完成一次后台 PowerShell 作业：启动一个短时后台任务，通过 job_output 获取结果，然后读取 package.json 并汇总环境状态。", "min_tool_calls": 3, "expected_tools": ["pwsh", "job_output", "read"], "required_fields_ok": true}
