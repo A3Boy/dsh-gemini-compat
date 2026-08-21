@@ -23,12 +23,26 @@ import { resolveReinforcement } from '../config.js'
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 const STREAM_IDLE_TIMEOUT_CODE = 'GEMINI_COMPAT_STREAM_IDLE_TIMEOUT'
 
+/**
+ * Detect context overflow errors from OpenAI-compatible and Google Gemini endpoints.
+ * Google uses: "The input token count (1213507) exceeds the maximum number of tokens allowed 1048576"
+ */
+export function isContextOverflow(detail: string): boolean {
+  return (
+    isContextWindowExceededError(detail) ||
+    /\btoken count(?:\s*\(\d+\))?\s+exceeds\b/i.test(detail) ||
+    /\bexceeds the maximum number of tokens allowed\b/i.test(detail)
+  )
+}
+
 export interface GeminiCompatAdapterOptions {
   readonly baseURL: string
   readonly defaultModel: string
   readonly wireProfile: WireProfile
   readonly toolSchemaReinforcement: ToolSchemaReinforcement
   readonly streamIdleTimeoutMs: number
+  readonly contextWindow: number
+  readonly defaultMaxTokens: number
   readonly resolveApiKey: () => Promise<string>
   readonly replayCodec: RouteSpecificReplayCodec
 }
@@ -47,7 +61,14 @@ export class GeminiCompatAdapter extends LlmAdapter {
   }
 
   resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model, inputModalities: ['text'] })
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: model,
+      inputModalities: ['text'],
+      context: { contextWindow: this.opts.contextWindow },
+      defaultMaxTokens: this.opts.defaultMaxTokens,
+    })
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -114,7 +135,7 @@ export class GeminiCompatAdapter extends LlmAdapter {
         const detail = [providerError?.code, providerError?.type, providerError?.message]
           .filter(Boolean)
           .join(' ')
-        if (isContextWindowExceededError(detail)) {
+        if (isContextOverflow(detail)) {
           code = CONTEXT_WINDOW_EXCEEDED_CODE
         } else {
           code = 'INVALID_REQUEST'

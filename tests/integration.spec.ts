@@ -120,4 +120,26 @@ describe('Integration: Diagnostics with official ToolSchema', () => {
     expect(metrics.invalidArgsTotal).toBe(2)
     expect(metrics.invalidArgsRate).toBeCloseTo(2 / 3)
   })
+
+  it('should map nested Google context overflow 400 to CONTEXT_WINDOW_EXCEEDED', async () => {
+    const { isContextOverflow } = await import('../src/adapter/adapter.js')
+    
+    // Real upstream error format: nested JSON string in error.message
+    const rawError = JSON.stringify({
+      error: {
+        code: 400,
+        message: 'The input token count (1213507) exceeds the maximum number of tokens allowed 1048576',
+        status: 'INVALID_ARGUMENT',
+      },
+    })
+    
+    // The adapter extracts the nested message
+    let detail = rawError
+    try {
+      const parsed = JSON.parse(rawError)
+      if (parsed.error?.message) detail = parsed.error.message
+    } catch {}
+
+    expect(isContextOverflow(detail)).toBe(true)
+  })
 })

@@ -1,0 +1,1 @@
+[{"id":1,"name":"Alice","score":82,"active":true,"group":"A"},{"id":2,"name":"Bob","score":74,"active":false,"group":"B"},{"id":3,"name":"Carol","score":94,"active":true,"group":"A"},{"id":4,"name":"David","score":76,"active":true,"group":"B"},{"id":5,"name":"Eve","score":88,"active":false,"group":"A"},{"id":6,"name":"Frank","score":71,"active":false,"group":"B"}]

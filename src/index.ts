@@ -9,6 +9,7 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 
 import { GeminiCompatAdapter } from './adapter/adapter.js'
 import type { GeminiCompatConfig, WireProfile } from './config.js'
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS } from './config.js'
 import { projectToolSchema } from './schema/project.js'
 import { RouteSpecificReplayCodec } from './replay/codec.js'
 import {
@@ -53,6 +54,8 @@ export const Config: z<Config> = z.object({
   wireProfile: z.union(['google-openai', 'generic-openai']).default('google-openai'),
   toolSchemaReinforcement: z.union(['off', 'auto', 'required-only']).default('auto'),
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  contextWindow: z.number().min(1).default(DEFAULT_CONTEXT_WINDOW),
+  defaultMaxTokens: z.number().min(1).default(DEFAULT_MAX_TOKENS),
   enableDiagnostics: z.boolean().default(false),
 })
 
@@ -64,6 +67,8 @@ function resolveConfig(input: GeminiCompatConfig): Required<GeminiCompatConfig> 
     wireProfile: (input.wireProfile ?? 'google-openai') as WireProfile,
     toolSchemaReinforcement: input.toolSchemaReinforcement ?? 'auto',
     streamIdleTimeoutMs: input.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    contextWindow: input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    defaultMaxTokens: input.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
     enableDiagnostics: input.enableDiagnostics ?? false,
   }
 }
@@ -100,6 +105,8 @@ export function apply(ctx: Context, config: GeminiCompatConfig): void {
     wireProfile: resolved.wireProfile,
     toolSchemaReinforcement: resolved.toolSchemaReinforcement,
     streamIdleTimeoutMs: resolved.streamIdleTimeoutMs,
+    contextWindow: resolved.contextWindow,
+    defaultMaxTokens: resolved.defaultMaxTokens,
     resolveApiKey,
     replayCodec,
   })
